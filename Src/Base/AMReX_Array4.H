@@ -1,6 +1,7 @@
 #ifndef AMREX_ARRAY4_H_
 #define AMREX_ARRAY4_H_
 
+#include <AMReX_ConstexprFor.H>
 #include <AMReX_Config.H>
 
 #include <AMReX.H>
@@ -178,11 +179,11 @@ namespace amrex {
             : p(a_p), begin(a_begin.x, a_begin.y, a_begin.z, 0), end(a_end.x, a_end.y, a_end.z, a_ncomp)
         {
             Long current_stride = 1;
-            for (int d = 0; d < N - 1; ++d) {
+            constexpr_for<0, N-1>([&](int d) {
                 Long len = end[d] - begin[d];
                 current_stride *= len;
                 nstride[d] = current_stride;
-            }
+            });
         }
 
         // Note: BoxND constructors are not constexpr because functions in BoxND are not constexpr
@@ -206,11 +207,11 @@ namespace amrex {
         {
             if constexpr (N > 1) {
                 Long current_stride = 1;
-                for (int d = 0; d < N - 1; ++d) {
+                constexpr_for<0, N-1>([&](int d) {
                     Long len = a_bigend[d] - a_smallend[d];
                     current_stride *= len;
                     nstride[d] = current_stride;
-                }
+                });
             }
         }
 
@@ -220,22 +221,22 @@ namespace amrex {
         constexpr ArrayND (T* a_p, IntVectND<M> const& a_smallend, IntVectND<M> const& a_bigend) noexcept
             : p(a_p), begin(), end()
         {
-            for (int d = 0; d < M; ++d) {
+            constexpr_for<0, M>([&](int d) {
                 begin[d] = a_smallend[d];
                 end[d] = a_bigend[d];
-            }
-            for (int d = M; d < N; ++d) {
+            });
+            constexpr_for<M, N>([&](int d) {
                 begin[d] = 0;
                 end[d] = 1;
-            }
+            });
 
             if constexpr (N > 1) {
                 Long current_stride = 1;
-                for (int d = 0; d < N - 1; ++d) {
+                constexpr_for<0, N-1>([&](int d) {
                     Long len = end[d] - begin[d];
                     current_stride *= len;
                     nstride[d] = current_stride;
-                }
+                });
             }
         }
 
@@ -245,24 +246,24 @@ namespace amrex {
         constexpr ArrayND (T* a_p, IntVectND<M> const& a_smallend, IntVectND<M> const& a_bigend, int ncomp) noexcept
             : p(a_p), begin(), end()
         {
-            for (int d = 0; d < M; ++d) {
+            constexpr_for<0, M>([&](int d) {
                 begin[d] = a_smallend[d];
                 end[d] = a_bigend[d];
-            }
-            for (int d = M; d < N-1; ++d) {
+            });
+            constexpr_for<M, N-1>([&](int d) {
                 begin[d] = 0;
                 end[d] = 1;
-            }
+            });
             begin[N-1] = 0;
             end[N-1] = ncomp;
 
             if constexpr (N > 1) {
                 Long current_stride = 1;
-                for (int d = 0; d < N - 1; ++d) {
+                constexpr_for<0, N-1>([&](int d) {
                     Long len = end[d] - begin[d];
                     current_stride *= len;
                     nstride[d] = current_stride;
-                }
+                });
             }
         }
 
@@ -399,9 +400,9 @@ namespace amrex {
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         constexpr std::size_t size () const noexcept {
             std::size_t s = 1;
-            for (int d = 0; d < N; ++d) {
+            constexpr_for<0, N>([&](int d) {
                 s *= (end[d] - begin[d]);
-            }
+            });
             return s;
         }
 
@@ -415,9 +416,9 @@ namespace amrex {
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         constexpr bool contains (IntVectND<N> const& iv) const noexcept {
             bool inside = true;
-            for (int d = 0; d < N; ++d) {
+            constexpr_for<0, N>([&](int d) {
                 inside = inside && (iv[d] >= begin[d]) && (iv[d] < end[d]);
-            }
+            });
             return inside;
         }
 
@@ -425,12 +426,12 @@ namespace amrex {
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         constexpr bool contains (IntVectND<Dim> const& iv) const noexcept {
             bool inside = true;
-            for (int d = 0; d < Dim; ++d) {
+            constexpr_for<0, Dim>([&](int d) {
                 inside = inside && (iv[d] >= begin[d]) && (iv[d] < end[d]);
-            }
-            for (int d = Dim; d < N-1; ++d) {
+            });
+            constexpr_for<Dim, N-1>([&](int d) {
                 inside = inside && (0 >= begin[d]) && (0 < end[d]);
-            }
+            });
             // Check last dimension with begin[N-1] which is always true
             // inside = inside && (begin[N-1] >= begin[N-1]) && (begin[N-1] < end[N-1]);
             return inside;
@@ -440,12 +441,12 @@ namespace amrex {
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         constexpr bool contains (IntVectND<Dim> const& iv, int n) const noexcept {
             bool inside = true;
-            for (int d = 0; d < Dim; ++d) {
+            constexpr_for<0, Dim>([&](int d) {
                 inside = inside && (iv[d] >= begin[d]) && (iv[d] < end[d]);
-            }
-            for (int d = Dim; d < N-1; ++d) {
+            });
+            constexpr_for<Dim, N-1>([&](int d) {
                 inside = inside && (0 >= begin[d]) && (0 < end[d]);
-            }
+            });
             // Check last dimension with n
             inside = inside && (n >= begin[N-1]) && (n < end[N-1]);
             return inside;
@@ -470,9 +471,9 @@ namespace amrex {
         constexpr Long get_offset (IntVectND<N> const& iv) const noexcept
         {
             Long offset = iv[0] - begin[0];
-            for (int d = 1; d < N; ++d) {
+            constexpr_for<1, N>([&](int d) {
                 offset += (iv[d] - begin[d]) * nstride[d-1];
-            }
+            });
             return offset;
         }
 
@@ -482,12 +483,12 @@ namespace amrex {
         constexpr Long get_offset (IntVectND<Dim> const& iv) const noexcept
         {
             Long offset = iv[0] - begin[0];
-            for (int d = 1; d < Dim; ++d) {
+            constexpr_for<1, Dim>([&](int d) {
                 offset += (iv[d] - begin[d]) * nstride[d-1];
-            }
-            for (int d = Dim; d < N-1; ++d) {
+            });
+            constexpr_for<Dim, N-1>([&](int d) {
                 offset += (Long(0) - begin[d]) * nstride[d-1];
-            }
+            });
             // offset += (begin[dim-1] - begin[dim-1]) * nstride[dim-2];
             return offset;
         }
@@ -499,12 +500,12 @@ namespace amrex {
         constexpr Long get_offset (IntVectND<Dim> const& iv, int n) const noexcept
         {
             Long offset = iv[0] - begin[0];
-            for (int d = 1; d < Dim; ++d) {
+            constexpr_for<1, Dim>([&](int d) {
                 offset += (iv[d] - begin[d]) * nstride[d-1];
-            }
-            for (int d = Dim; d < N-1; ++d) {
+            });
+            constexpr_for<Dim, N-1>([&](int d) {
                 offset += (Long(0) - begin[d]) * nstride[d-1];
-            }
+            });
             offset += (n - begin[N-1]) * nstride[N-2];
             return offset;
         }
