@@ -159,10 +159,9 @@ class AmrexArrayND:
         # fmt: off
         for d in range(int(self.N)):
             if iv[d] < begin[d] or iv[d] >= end[d]:
-                msg = "ArrayND index ({}) is out of bound ({}:{})".format(
+                msg = "ArrayND index ({}) is out of bound ({})".format(
                     ','.join(str(iv[i]) for i in range(int(self.N))),
-                    ','.join(str(begin[i]) for i in range(int(self.N))),
-                    ','.join(str(end[i]-1) for i in range(int(self.N))),
+                    ','.join(f"{begin[i]}:{end[i]-1}" for i in range(int(self.N))),
                 )
                 raise IndexError(msg)
         # fmt: on
@@ -176,6 +175,13 @@ class AmrexArrayND:
         for d in range(1, int(self.N)):
             offset += (iv[d] - begin[d]) * nstride[d-1]
         return obj["p"][offset]
+
+    @class_methods.member_function("T&", "operator()", ["amrex::Dim3&", "int"])
+    def subscript_Dim3(self, obj, cell, n=0):
+        if self.N != 4:
+            msg = f"ArrayND<{self.N}> operator(Dim3, int) is only valid for N=4"
+            raise TypeError(msg)
+        return self.subscript_helper(obj, cell["x"], cell["y"], cell["z"], n)
 
     def subscript_variadic(self, obj, *indices):
         iv = list(indices)
