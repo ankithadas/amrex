@@ -131,58 +131,151 @@ class AmrexArray3D:  # pylint: disable=no-member
             ]
         assert False
 
-
-@class_methods.Class("amrex::Array4", template_types=["T"])
-class AmrexArray4:
+@class_methods.Class("amrex::ArrayND", template_types=["T", "N"])
+class AmrexArrayND:
     @class_methods.member_function("std::size_t", "size", [])
     def size(self, obj):
-        return obj["nstride"] * obj["ncomp"]
+        begin = obj["begin"]["vect"]
+        end = obj["end"]["vect"]
+        size = 1
+        for i in range(int(self.N)):
+            size *= end[i] - begin[i]
+        return size
 
-    def subscript_helper(self, obj, i, j, k, n):
-        begin = obj["begin"]
-        end = obj["end"]
+    def subscript_helper(self, obj, iv):
+        begin = obj["begin"]["vect"]
+        end = obj["end"]["vect"]
+
+        if len(iv) != int(self.N):
+            # Set the missing dimensions to begin values
+            iv_new = [0] * int(self.N)
+            for d in range(int(self.N)):
+                if d < len(iv):
+                    iv_new[d] = iv[d]
+                else:
+                    iv_new[d] = begin[d]
+            iv = iv_new
+
         # fmt: off
-        if (
-            i < begin["x"] or i >= end["x"] or
-            j < begin["y"] or j >= end["y"] or
-            k < begin["z"] or k >= end["z"] or
-            n < 0 or n >= obj["ncomp"]
-        ):
-            msg = "Array4 index ({},{},{},{}) is out of bound ({}:{},{}:{},{}:{},0:{})".format(
-                i, j, k, n,
-                begin["x"], end["x"] - 1,
-                begin["y"], end["y"] - 1,
-                begin["z"], end["z"] - 1,
-                obj["ncomp"] - 1,
-            )
-            raise IndexError(msg)
+        for d in range(int(self.N)):
+            if iv[d] < begin[d] or iv[d] >= end[d]:
+                msg = "ArrayND index ({}) is out of bound ({}:{})".format(
+                    ','.join(str(iv[i]) for i in range(int(self.N))),
+                    ','.join(str(begin[i]) for i in range(int(self.N))),
+                    ','.join(str(end[i]-1) for i in range(int(self.N))),
+                )
+                raise IndexError(msg)
         # fmt: on
-        return obj["p"][
-            (i - begin["x"])
-            + (j - begin["y"]) * obj["jstride"]
-            + (k - begin["z"]) * obj["kstride"]
-            + n * obj["nstride"]
-        ]
+        nstride = [0] * (int(self.N) - 1)
+        current_stride = 1
+        for d in range(int(self.N) - 1):
+            len_d = end[d] - begin[d]
+            nstride[d] = current_stride
+            current_stride *= len_d
+        offset = iv[0] - begin[0]
+        for d in range(1, int(self.N)):
+            offset += (iv[d] - begin[d]) * nstride[d-1]
+        return obj["p"][offset]
 
-    # GDB's overload resolution ignores any missing arguments at the end, so
-    # this handles both the 3-int and 4-int overloads
+    def subscript_variadic(self, obj, *indices):
+        iv = list(indices)
+        n_len = len(iv)
+        if n_len != self.N and n_len != self.N - 1:
+            msg = f"ArrayND<{self.N}> operator() expected {self.N} or {self.N-1} arguments, got {n_len}"
+            raise IndexError(msg)
+        return self.subscript_helper(obj, iv)
+
+    @class_methods.member_function("T&", "operator()", ["int"])
+    def subscript_1(self, obj, i):
+        return self.subscript_variadic(obj, i)
+
+    @class_methods.member_function("T&", "operator()", ["int"] * 2)
+    def subscript_2(self, obj, i, j):
+        return self.subscript_variadic(obj, i, j)
+
+    @class_methods.member_function("T&", "operator()", ["int"] * 3)
+    def subscript_3(self, obj, i, j, k):
+        return self.subscript_variadic(obj, i, j, k)
+
     @class_methods.member_function("T&", "operator()", ["int"] * 4)
-    def subscript(self, obj, i, j, k, n=0):
-        return self.subscript_helper(obj, i, j, k, n)
+    def subscript_4(self, obj, i, j, k, n):
+        return self.subscript_variadic(obj, i, j, k, n)
 
-    @class_methods.member_function("T&", "operator()", ["amrex::IntVect&", "int"])
-    def subscript_IntVect(self, obj, iv, n=0):
-        spacedim = int(iv.type.template_argument(0))
-        indices = [iv["vect"][0], 0, 0]
-        if spacedim >= 2:
-            indices[1] = iv["vect"][1]
-        if spacedim >= 3:
-            indices[2] = iv["vect"][2]
-        return self.subscript_helper(obj, *indices, n)
+    @class_methods.member_function("T&", "operator()", ["int"] * 5)
+    def subscript_5(self, obj, i, j, k, n, m):
+        return self.subscript_variadic(obj, i, j, k, n, m)
 
-    @class_methods.member_function("T&", "operator()", ["amrex::Dim3&", "int"])
-    def subscript_Dim3(self, obj, cell, n=0):
-        return self.subscript_helper(obj, cell["x"], cell["y"], cell["z"], n)
+    @class_methods.member_function("T&", "operator()", ["int"] * 6)
+    def subscript_6(self, obj, i, j, k, n, m, p):
+        return self.subscript_variadic(obj, i, j, k, n, m, p)
+
+    @class_methods.member_function("T&", "operator()", ["int"] * 7)
+    def subscript_7(self, obj, i, j, k, n, m, p, q):
+        return self.subscript_variadic(obj, i, j, k, n, m, p, q)
+
+
+# @class_methods.Class("amrex::Array4", template_types=["T"])
+# class AmrexArray4:
+#     @class_methods.member_function("std::size_t", "size", [])
+#     def size(self, obj):
+#         begin = obj["begin"]["vect"]
+#         end = obj["end"]["vect"]
+#         size = 1
+#         for i in range(4):
+#             size *= end[i] - begin[i]
+#         return size
+
+#     def subscript_helper(self, obj, i, j, k, n):
+#         begin = obj["begin"]["vect"]
+#         end = obj["end"]["vect"]
+#         # fmt: off
+#         if (
+#             i < begin[0] or i >= end[0] or
+#             j < begin[1] or j >= end[1] or
+#             k < begin[2] or k >= end[2] or
+#             n < begin[3] or n >= end[3]
+#         ):
+#             msg = "Array4 index ({},{},{},{}) is out of bound ({}:{},{}:{},{}:{},{}:{})".format(
+#                 i, j, k, n,
+#                 begin[0], end[0] - 1,
+#                 begin[1], end[1] - 1,
+#                 begin[2], end[2] - 1,
+#                 begin[3], end[3] - 1,
+#             )
+#             raise IndexError(msg)
+#         nstride = [0] * 3
+#         current_stride = 1
+#         for d in range(3):
+#             len_d = end[d] - begin[d]
+#             nstride[d] = current_stride
+#             current_stride *= len_d
+#         # fmt: on
+#         return obj["p"][
+#             (i - begin[0])
+#             + (j - begin[1]) * nstride[0]
+#             + (k - begin[2]) * nstride[1]
+#             + (n - begin[3]) * nstride[2]
+#         ]
+
+#     # GDB's overload resolution ignores any missing arguments at the end, so
+#     # this handles both the 3-int and 4-int overloads
+#     @class_methods.member_function("T&", "operator()", ["int"] * 4)
+#     def subscript(self, obj, i, j, k, n=0):
+#         return self.subscript_helper(obj, i, j, k, n)
+
+#     @class_methods.member_function("T&", "operator()", ["amrex::IntVect&", "int"])
+#     def subscript_IntVect(self, obj, iv, n=0):
+#         spacedim = int(iv.type.template_argument(0))
+#         indices = [iv["vect"][0], 0, 0]
+#         if spacedim >= 2:
+#             indices[1] = iv["vect"][1]
+#         if spacedim >= 3:
+#             indices[2] = iv["vect"][2]
+#         return self.subscript_helper(obj, *indices, n)
+
+#     @class_methods.member_function("T&", "operator()", ["amrex::Dim3&", "int"])
+#     def subscript_Dim3(self, obj, cell, n=0):
+#         return self.subscript_helper(obj, cell["x"], cell["y"], cell["z"], n)
 
 
 @class_methods.Class("amrex::Table1D", template_types=["T"])
