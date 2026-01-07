@@ -235,7 +235,7 @@ namespace amrex {
          * \param a_p Pointer to data.
          * \param box The domain covered by this array.
          *
-         * \TODO: Make BoxND functions constexpr to allow this constructor to be constexpr.
+         * TODO: Make BoxND functions constexpr to allow this constructor to be constexpr.
          */
         template <int M>
         AMREX_GPU_HOST_DEVICE
@@ -396,13 +396,14 @@ namespace amrex {
 
         /**
          * \brief Multi-index operator() for accessing elements.
-         * \param i... Indices for each dimension.
+         * \tparam idx Variadic template for indices.
+         * \param i Variadic list of indicies.
          * \return Reference to the element.
          *
          * This operator is only enabled when the number of indices provided matches the dimension N or N-1
          * where in the latter case the last dimension is assumed to be 0. The passed indices must be of
          * integral types that can be converted to int without narrowing. The last index can also be an enum type.
-         * \TODO: Use concepts when we move to C++20. The error message now is not user friendly.
+         * TODO: Use concepts when we move to C++20. The error message now is not user friendly.
          */
         template <typename... idx, class U=T,
             std::enable_if_t<!std::is_void_v<U> && detail::ArrayNDIndexCheck_impl_v<N, idx...>,int> = 0>
@@ -473,7 +474,8 @@ namespace amrex {
 
         /**
          * \brief Multi-index ptr() for accessing pointer to element.
-         * \param i... Indices for each dimension.
+         * \tparam idx Variadic template for indices.
+         * \param i Variadic list of indicies.
          * \return Pointer to the element.
          */
         template <typename... idx, class U=T,
