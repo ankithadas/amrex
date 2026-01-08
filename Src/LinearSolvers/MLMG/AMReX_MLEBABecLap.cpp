@@ -1254,6 +1254,7 @@ MLEBABecLap::applyBC (int amrlev, int mglev, MultiFab& in, BCMode bc_mode, State
 
 #ifdef AMREX_USE_GPU
     m_eb_bc_tags[amrlev][mglev].define(ebtags);
+apply_eb_tags:
     MultiArray4<Real const> foo_ma;
     Array<MultiArray4<Real const>, 2*AMREX_SPACEDIM> bndry_arrays;
     for (OrientationIter oit; oit; ++oit) {
@@ -1261,7 +1262,6 @@ MLEBABecLap::applyBC (int amrlev, int mglev, MultiFab& in, BCMode bc_mode, State
         bndry_arrays[ori] = (bndry != nullptr) ?
             bndry->bndryValues(ori).arrays() : foo_ma;
     }
-apply_eb_tags:
     auto inma = in.arrays();
     amrex::ParallelFor(
         m_eb_bc_tags[amrlev][mglev], [=] AMREX_GPU_DEVICE (int i, int j, int k, MLMGABCEBTag<RT> const& tag) noexcept
