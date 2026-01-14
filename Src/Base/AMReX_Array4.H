@@ -536,7 +536,7 @@ namespace amrex {
          * the spatial dimensions (either N-1 or AMREX_SPACEDIM).
          */
         template <int M, std::enable_if_t<last_dim_component
-            && ((M + 1 == N) || (N == 4 && (N == 4 && M == AMREX_SPACEDIM))), int> = 0>
+            && ((M + 1 == N) || (N == 4 && M == AMREX_SPACEDIM)), int> = 0>
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         T* ptr (IntVectND<M> const& iv, int n) const noexcept {
 #if defined(AMREX_DEBUG) || defined(AMREX_BOUND_CHECK)
