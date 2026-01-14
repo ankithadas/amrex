@@ -311,7 +311,7 @@ namespace amrex {
             && last_dim_component, int> = 0>
         AMREX_GPU_HOST_DEVICE
         constexpr ArrayND (T* a_p, IntVectND<M> const& a_begin, IntVectND<M> const& a_end, int ncomp) noexcept
-            : p(a_p), begin(a_begin.expand<N>(0)), end(a_end.expand<N>(1))
+            : p(a_p), begin(a_begin.template expand<N>(0)), end(a_end.template expand<N>(1))
         {
             end[N-1] = ncomp;
 
