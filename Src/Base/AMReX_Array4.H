@@ -611,6 +611,7 @@ namespace amrex {
 
         template <int M, std::enable_if_t<(M == N)
             || (last_dim_component && (M + 1 == N || (N == 4 && M == AMREX_SPACEDIM))), int> = 0>
+        [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         constexpr bool contains (IntVectND<M> const& iv) const noexcept {
             bool inside = true;
             constexpr int spatial_limit = (last_dim_component && M == N) ? N - 1 : M;
