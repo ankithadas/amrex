@@ -614,8 +614,8 @@ namespace amrex {
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         constexpr bool contains (IntVectND<M> const& iv) const noexcept {
             bool inside = true;
-            constexpr int spatial_limit = (last_dim_component && M == N) ? N - 1 : M;
-            constexpr_for<0, spatial_limit>([&](int d) {
+            constexpr int idx = (last_dim_component && M == N) ? N - 1 : M;
+            constexpr_for<0, idx>([&](int d) {
                 inside = inside && (iv[d] >= begin[d]) && (iv[d] < end[d]);
             });
             if constexpr (last_dim_component && M == N) {
@@ -657,8 +657,8 @@ namespace amrex {
             Long offset = iv[0] - begin[0];
             // If M == N and we have a component at the end, we only loop up to N-1 for spatial.
             // Otherwise, we loop up to M.
-            constexpr int spatial_lim = (last_dim_component && M == N) ? N - 1 : M;
-            constexpr_for<1, spatial_lim>([&](int d) {
+            constexpr int idx = (last_dim_component && M == N) ? N - 1 : M;
+            constexpr_for<1, idx>([&](int d) {
                 offset += (iv[d] - begin[d]) * nstride[d-1];
             });
 
