@@ -250,38 +250,6 @@ namespace amrex {
         }
 
         /**
-         * \brief Constructor for N=4 using IntVect.
-         * \param a_p Pointer to data.
-         * \param a_begin Start index.
-         * \param a_end End index exclusive.
-         * \param a_ncomp Number of components (4th dimension).
-         *
-         * Typically used for standard (i, j, k, n) access in 3D simulations.
-         */
-        template <int M=N, std::enable_if_t<M==4 && last_dim_component,int> = 0>
-        AMREX_GPU_HOST_DEVICE
-        constexpr ArrayND (T* a_p, IntVect const& a_begin, IntVect const& a_end, int a_ncomp) noexcept
-            : p(a_p)
-        {
-            for (int d=0; d < AMREX_SPACEDIM; ++d) {
-                begin[d] = a_begin[d];
-                end[d] = a_end[d];
-            }
-            for (int d=AMREX_SPACEDIM; d < N-1; ++d) {
-                begin[d] = 0;
-                end[d] = 1;
-            }
-            begin[N-1] = 0;
-            end[N-1] = a_ncomp;
-            Long current_stride = 1;
-            constexpr_for<0, N-1>([&](int d) {
-                Long len = end[d] - begin[d];
-                current_stride *= len;
-                nstride[d] = current_stride;
-            });
-        }
-
-        /**
          * \brief Constructor using a BoxND.
          * \param a_p Pointer to data.
          * \param box The domain covered by this array.
