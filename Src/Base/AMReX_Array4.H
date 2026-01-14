@@ -228,28 +228,6 @@ namespace amrex {
             : p(rhs.p), nstride(rhs.nstride), begin(rhs.begin), end(rhs.end) {}
 
         /**
-         * \brief Constructor for N=4 using Dim3.
-         * \param a_p Pointer to data.
-         * \param a_begin Start index.
-         * \param a_end End index exclusive.
-         * \param a_ncomp Number of components (4th dimension).
-         *
-         * Typically used for standard (i, j, k, n) access in 3D simulations.
-         */
-        template <int M=N, std::enable_if_t<M==4 && last_dim_component,int> = 0>
-        AMREX_GPU_HOST_DEVICE
-        constexpr ArrayND (T* a_p, Dim3 const& a_begin, Dim3 const& a_end, int a_ncomp) noexcept
-            : p(a_p), begin(a_begin.x, a_begin.y, a_begin.z, 0), end(a_end.x, a_end.y, a_end.z, a_ncomp)
-        {
-            Long current_stride = 1;
-            constexpr_for<0, N-1>([&](int d) {
-                Long len = end[d] - begin[d];
-                current_stride *= len;
-                nstride[d] = current_stride;
-            });
-        }
-
-        /**
          * \brief Constructor using a BoxND.
          * \param a_p Pointer to data.
          * \param box The domain covered by this array.
@@ -299,6 +277,28 @@ namespace amrex {
         }
 
         /**
+         * \brief Constructor for N=4 using Dim3.
+         * \param a_p Pointer to data.
+         * \param a_begin Start index.
+         * \param a_end End index exclusive.
+         * \param a_ncomp Number of components (4th dimension).
+         *
+         * Typically used for standard (i, j, k, n) access in 3D simulations.
+         */
+        template <int M=N, std::enable_if_t<M==4 && last_dim_component,int> = 0>
+        AMREX_GPU_HOST_DEVICE
+        constexpr ArrayND (T* a_p, Dim3 const& a_begin, Dim3 const& a_end, int a_ncomp) noexcept
+            : p(a_p), begin(a_begin.x, a_begin.y, a_begin.z, 0), end(a_end.x, a_end.y, a_end.z, a_ncomp)
+        {
+            Long current_stride = 1;
+            constexpr_for<0, N-1>([&](int d) {
+                Long len = end[d] - begin[d];
+                current_stride *= len;
+                nstride[d] = current_stride;
+            });
+        }
+
+        /**
          * \brief Reduced dimension constructor with component count.
          * \param a_p Pointer to data.
          * \param a_begin Start index (inclusive).
@@ -311,8 +311,16 @@ namespace amrex {
             && last_dim_component, int> = 0>
         AMREX_GPU_HOST_DEVICE
         constexpr ArrayND (T* a_p, IntVectND<M> const& a_begin, IntVectND<M> const& a_end, int ncomp) noexcept
-            : p(a_p), begin(a_begin.template expand<N>(0)), end(a_end.template expand<N>(1))
+            : p(a_p)
         {
+            constexpr_for<0, M>([&](int d) {
+                begin[d] = a_begin[d];
+                end[d] = a_end[d];
+            });
+            constexpr_for<M, N>([&](int d) {
+                begin[d] = 0;
+                end[d] = 1;
+            });
             end[N-1] = ncomp;
 
             if constexpr (N > 1) {
@@ -411,27 +419,19 @@ namespace amrex {
         }
 
         /**
-         * \brief Access element by IntVectND<N>.
-         * \param iv IntVectND<N>
+         * \brief Access element by IntVectND.
+         * \tparam M The dimension of the index vector.
+         * \param iv The index vector.
          * \return Reference to the element.
-         */
-        template <class U=T, std::enable_if_t<!std::is_void_v<U>,int> = 0>
-        [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-        U& operator() (IntVectND<N> const& iv) const noexcept {
-#if defined(AMREX_DEBUG) || defined(AMREX_BOUND_CHECK)
-            index_assert(iv);
-#endif
-            return p[get_offset(iv)];
-        }
-
-        /**
-         * \brief Access element by IntVectND<N-1> or IntVectND<AMREX_SPACEDIM>.
-         * \param iv IntVectND<N-1> or IntVectND<AMREX_SPACEDIM>.
-         * \return Reference to the element.
+         *
+         * This function handles access via:
+         * 1. Full dimension vector (M == N).
+         * 2. Spatial dimension vector (M == N-1 or (M == AMREX_SPACEDIM) && N == 4)
+         *    (only enabled if last_dim_component is true).
          */
         template <int M, class U=T, std::enable_if_t<
-            !std::is_void_v<U> && ((M == N-1) || (M == AMREX_SPACEDIM))
-            && last_dim_component,int> = 0>
+            !std::is_void_v<U> &&
+            ((M == N) || (last_dim_component && ((M + 1 == N) || (N == 4 && M == AMREX_SPACEDIM)))), int> = 0>
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         U& operator() (IntVectND<M> const& iv) const noexcept {
 #if defined(AMREX_DEBUG) || defined(AMREX_BOUND_CHECK)
@@ -441,14 +441,18 @@ namespace amrex {
         }
 
         /**
-         * \brief Access element by IntVectND<N-1> or IntVectND<AMREX_SPACEDIM> and component index.
-         * \param iv IntVectND<N-1> or IntVectND<AMREX_SPACEDIM>.
+         * \brief Access element by spatial IntVectND and component index.
+         * \tparam M The dimension of the spatial index vector (typically N-1 or AMREX_SPACEDIM).
+         * \param iv The spatial index vector.
          * \param n Component index (last dimension).
          * \return Reference to the element.
+         *
+         * This overload is enabled only when last_dim_component is true and M represents
+         * the spatial dimensions (either N-1 or AMREX_SPACEDIM).
          */
         template <int M, class U=T, std::enable_if_t<
-            !std::is_void_v<U> && ((M+1 == N) || (M == AMREX_SPACEDIM))
-            && last_dim_component,int> = 0>
+            !std::is_void_v<U> && last_dim_component
+            && ((M + 1 == N) || (N == 4 && M == AMREX_SPACEDIM)),int> = 0>
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         U& operator() (IntVectND<M> const& iv, int n) const noexcept {
 #if defined(AMREX_DEBUG) || defined(AMREX_BOUND_CHECK)
@@ -512,25 +516,18 @@ namespace amrex {
         }
 
         /**
-         * \brief Access pointer by IntVectND<N>.
-         * \param iv IntVectND<N>
+         * \brief Access pointer by IntVectND.
+         * \tparam M The dimension of the index vector.
+         * \param iv The index vector.
          * \return Pointer to the element.
+         *
+         * This function handles access via:
+         * 1. Full dimension vector (M == N).
+         * 2. Spatial dimension vector (M == N-1 or M == AMREX_SPACEDIM)
+         *    (only enabled if last_dim_component is true).
          */
-        [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-        T* ptr (IntVectND<N> const& iv) const noexcept {
-#if defined(AMREX_DEBUG) || defined(AMREX_BOUND_CHECK)
-            index_assert(iv);
-#endif
-            return p + get_offset(iv);
-        }
-
-        /**
-         * \brief Access pointer by IntVectND<N-1> or IntVectND<AMREX_SPACEDIM>.
-         * \param iv IntVectND<N-1> or IntVectND<AMREX_SPACEDIM>.
-         * \return Pointer to the element.
-         */
-        template <int M, std::enable_if_t<((M+1 == N) || (M == AMREX_SPACEDIM))
-            && last_dim_component,int> = 0>
+        template <int M, std::enable_if_t<(M == N)
+            || (last_dim_component && ((M + 1 == N) || (N == 4 && M == AMREX_SPACEDIM))), int> = 0>
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         T* ptr (IntVectND<M> const& iv) const noexcept {
 #if defined(AMREX_DEBUG) || defined(AMREX_BOUND_CHECK)
@@ -540,13 +537,17 @@ namespace amrex {
         }
 
         /**
-         * \brief Access pointer by IntVectND<N-1> or IntVectND<AMREX_SPACEDIM> and component index.
-         * \param iv IntVectND<N-1> or IntVectND<AMREX_SPACEDIM>.
+         * \brief Access pointer by spatial IntVectND and component index.
+         * \tparam M The dimension of the spatial index vector (typically N-1 or AMREX_SPACEDIM).
+         * \param iv The spatial index vector.
          * \param n Component index (last dimension).
          * \return Pointer to the element.
+         *
+         * This overload is enabled only when last_dim_component is true and M represents
+         * the spatial dimensions (either N-1 or AMREX_SPACEDIM).
          */
-        template <int M, std::enable_if_t<((M+1 == N) || (M == AMREX_SPACEDIM))
-            && last_dim_component,int> = 0>
+        template <int M, std::enable_if_t<last_dim_component
+            && ((M + 1 == N) || (N == 4 && (N == 4 && M == AMREX_SPACEDIM))), int> = 0>
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         T* ptr (IntVectND<M> const& iv, int n) const noexcept {
 #if defined(AMREX_DEBUG) || defined(AMREX_BOUND_CHECK)
@@ -628,35 +629,22 @@ namespace amrex {
             return this->contains(IntVectND<nidx>{i...});
         }
 
-        [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-        constexpr bool contains (IntVectND<N> const& iv) const noexcept {
+        template <int M, std::enable_if_t<(M == N)
+            || (last_dim_component && (M + 1 == N || (N == 4 && M == AMREX_SPACEDIM))), int> = 0>
+        constexpr bool contains (IntVectND<M> const& iv) const noexcept {
             bool inside = true;
-            if constexpr (last_dim_component == false) {
-                constexpr_for<0, N>([&](int d) {
-                    inside = inside && (iv[d] >= begin[d]) && (iv[d] < end[d]);
-                });
-            } else {
-                constexpr_for<0, N-1>([&](int d) {
-                    inside = inside && (iv[d] >= begin[d]) && (iv[d] < end[d]);
-                });
+            constexpr int spatial_limit = (last_dim_component && M == N) ? N - 1 : M;
+            constexpr_for<0, spatial_limit>([&](int d) {
+                inside = inside && (iv[d] >= begin[d]) && (iv[d] < end[d]);
+            });
+            if constexpr (last_dim_component && M == N) {
                 inside = inside && (iv[N-1] >= 0) && (iv[N-1] < end[N-1]);
             }
             return inside;
         }
 
-        template <int M, std::enable_if_t<((M+1 == N) || (M == AMREX_SPACEDIM))
-            && last_dim_component,int> = 0>
-        [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-        constexpr bool contains (IntVectND<M> const& iv) const noexcept {
-            bool inside = true;
-            constexpr_for<0, M>([&](int d) {
-                inside = inside && (iv[d] >= begin[d]) && (iv[d] < end[d]);
-            });
-            return inside;
-        }
-
-        template <int M, std::enable_if_t<((M+1 == N) || (M == AMREX_SPACEDIM))
-            && last_dim_component,int> = 0>
+        template <int M, std::enable_if_t<last_dim_component
+            && ((M + 1 == N) || (N == 4 && M == AMREX_SPACEDIM)), int> = 0>
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         constexpr bool contains (IntVectND<M> const& iv, int n) const noexcept {
             bool inside = true;
@@ -680,39 +668,29 @@ namespace amrex {
             return CellData<T>(this->ptr(i,j,k), nstride[M-2], ncomp);
         }
 
-        // Main get_offset function for N
+        template <int M, std::enable_if_t<(M == N)
+            || (last_dim_component && (M + 1 == N || M == AMREX_SPACEDIM)), int> = 0>
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-        constexpr Long get_offset (IntVectND<N> const& iv) const noexcept
+        constexpr Long get_offset (IntVectND<M> const& iv) const noexcept
         {
             Long offset = iv[0] - begin[0];
-            if constexpr (last_dim_component == false) {
-                constexpr_for<1, N>([&](int d) {
-                    offset += (iv[d] - begin[d]) * nstride[d-1];
-                });
-            } else {
-                constexpr_for<1, N-1>([&](int d) {
-                    offset += (iv[d] - begin[d]) * nstride[d-1];
-                });
+            // If M == N and we have a component at the end, we only loop up to N-1 for spatial.
+            // Otherwise, we loop up to M.
+            constexpr int spatial_lim = (last_dim_component && M == N) ? N - 1 : M;
+            constexpr_for<1, spatial_lim>([&](int d) {
+                offset += (iv[d] - begin[d]) * nstride[d-1];
+            });
+
+            // Handle the component offset if the input is the full N dimensions
+            // and the last dimension is a component.
+            if constexpr (last_dim_component && M == N) {
                 offset += iv[N-1] * nstride[N-2];
             }
             return offset;
         }
 
-        template <int M, std::enable_if_t<((M+1 == N) || (M == AMREX_SPACEDIM))
-            && last_dim_component,int> = 0>
-        [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-        constexpr Long get_offset (IntVectND<M> const& iv) const noexcept
-        {
-            Long offset = iv[0] - begin[0];
-            constexpr_for<1, M>([&](int d) {
-                offset += (iv[d] - begin[d]) * nstride[d-1];
-            });
-            return offset;
-        }
-
-        // Overload not valid if last_dim_component == false and N=1
-        template <int M, std::enable_if_t<((M+1 == N) || (M == AMREX_SPACEDIM))
-            && last_dim_component,int> = 0>
+        template <int M, std::enable_if_t<last_dim_component
+            && ((M + 1 == N) || (N == 4 && M == AMREX_SPACEDIM)), int> = 0>
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         constexpr Long get_offset (IntVectND<M> const& iv, int n) const noexcept
         {
@@ -810,7 +788,7 @@ namespace amrex {
     template <typename T, int N>
     ArrayND (T*, IntVectND<N> const&, IntVectND<N> const&, int) -> ArrayND<T, N+1, true>;
 
-    // 5: Matches ArrayND (T*, Dim3, Dim3) -> ArrayND<T,4, last_dim_component=false>
+    // 5: Matches ArrayND (T*, Dim3, Dim3) -> ArrayND<T,4, last_dim_component=true>
     template <typename T>
     ArrayND (T*, Dim3 const&, Dim3 const&, int) -> ArrayND<T, 4, true>;
 
