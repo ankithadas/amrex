@@ -307,7 +307,7 @@ namespace amrex {
          *
          * Pads intermediate dimensions with [0,1) and sets the last dimension to [0, ncomp).
          */
-        template <int M, std::enable_if_t<((M+1 == N) || (M == AMREX_SPACEDIM))
+        template <int M, std::enable_if_t<((M+1 == N) || (N == 4 && M == AMREX_SPACEDIM))
             && last_dim_component, int> = 0>
         AMREX_GPU_HOST_DEVICE
         constexpr ArrayND (T* a_p, IntVectND<M> const& a_begin, IntVectND<M> const& a_end, int ncomp) noexcept
@@ -462,24 +462,13 @@ namespace amrex {
         }
 
         /**
-         * \brief Access element by Dim3 (only when N=4).
+         * \brief Access element by Dim3.
          * \param cell Dim3
          * \return Reference to the element.
+         * Only enabled when N=4 and last_dim_component == true or N=3 and last_dim_component == false.
          */
         template <class U=T, std::enable_if_t<!std::is_void_v<U>
-            && last_dim_component && (N == 4),int> = 0>
-        [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-        U& operator() (Dim3 const& cell) const noexcept {
-            return this->operator()(cell.x,cell.y,cell.z);
-        }
-
-        /**
-         * \brief Access element by Dim3 (only when N=3 and last_dim_component == false).
-         * \param cell Dim3
-         * \return Reference to the element.
-         */
-        template <class U=T, std::enable_if_t<!std::is_void_v<U>
-            && !last_dim_component && (N == 3),int> = 0>
+            && ((N == 4 && last_dim_component) || (N == 3 && !last_dim_component)),int> = 0>
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         U& operator() (Dim3 const& cell) const noexcept {
             return this->operator()(cell.x,cell.y,cell.z);
@@ -557,22 +546,13 @@ namespace amrex {
         }
 
         /**
-         * \brief Access pointer by Dim3 (only when N=4 and last_dim_component == true).
+         * \brief Access pointer by Dim3.
          * \param cell Dim3
          * \return Pointer to the element.
+         * Only enabled when N=4 and last_dim_component == true or N=3 and last_dim_component == false.
          */
-        template <int M=N, std::enable_if_t<(M == 4) && last_dim_component,int> = 0>
-        [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-        T* ptr (Dim3 const& cell) const noexcept {
-            return this->ptr(cell.x,cell.y,cell.z);
-        }
-
-        /**
-         * \brief Access pointer by Dim3 (only when N=3 and last_dim_component == false).
-         * \param cell Dim3
-         * \return Pointer to the element.
-         */
-        template <int M=N, std::enable_if_t<(M == 3) && !last_dim_component,int> = 0>
+        template <int M=N, std::enable_if_t<(M == 4 && last_dim_component)
+            || (M == 3 && !last_dim_component),int> = 0>
         [[nodiscard]] AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
         T* ptr (Dim3 const& cell) const noexcept {
             return this->ptr(cell.x,cell.y,cell.z);
