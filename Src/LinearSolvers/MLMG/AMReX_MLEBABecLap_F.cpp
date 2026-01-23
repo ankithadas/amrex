@@ -34,6 +34,10 @@ MLEBABecLap::Fapply (int amrlev, int mglev, MultiFab& out, const MultiFab& in) c
 
     const Box& domain_box = m_geom[amrlev][mglev].Domain();
 
+    AMREX_D_TERM(const Real dhx = m_b_scalar * dxinvarr[0]*dxinvarr[0];,
+                 const Real dhy = m_b_scalar * dxinvarr[1]*dxinvarr[1];,
+                 const Real dhz = m_b_scalar * dxinvarr[2]*dxinvarr[2]);
+
     AMREX_D_TERM(
         const int domlo_x = domain_box.smallEnd(0);
         const int domhi_x = domain_box.bigEnd(0);,
@@ -174,8 +178,9 @@ MLEBABecLap::Fapply (int amrlev, int mglev, MultiFab& out, const MultiFab& in) c
                                         AMREX_D_DECL(bxfab,byfab,bzfab),
                                         ccmfab, ebdata, bebfab,
                                         is_eb_dirichlet, phiebfab,
-                                        is_eb_inhomog, ascalar, bscalar,
-                                        dxinvarr,
+                                        is_eb_inhomog, ascalar,
+                                        // bscalar, dxinvarr,
+                                        AMREX_D_DECL(dhx, dhy, dhz),
                                         beta_on_centroid, phi_on_centroid);
                     });
                 }

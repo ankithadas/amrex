@@ -230,13 +230,14 @@ void mlebabeclap_adotx (int i, int j, int k, int n, Array4<T> const& y,
                         EBData const& ebdata,
                         Array4<T const> const& beb,
                         bool is_dirichlet, Array4<T const> const& phieb,
-                        bool is_inhomog, T alpha, T beta,
-                        GpuArray<Real, AMREX_SPACEDIM> const& dxinv,
+                        bool is_inhomog, T alpha,
+                        // T beta, GpuArray<Real, AMREX_SPACEDIM> const& dxinv,
+                        T dhx, T dhy, T dhz,
                         bool beta_on_centroid, bool phi_on_centroid) noexcept
 {
-    const T dhx = beta*dxinv[0]*dxinv[0];
-    const T dhy = beta*dxinv[1]*dxinv[1];
-    const T dhz = beta*dxinv[2]*dxinv[2];
+    // const T dhx = beta*dxinv[0]*dxinv[0];
+    // const T dhy = beta*dxinv[1]*dxinv[1];
+    // const T dhz = beta*dxinv[2]*dxinv[2];
 
     bool beta_on_center = !(beta_on_centroid);
     bool  phi_on_center = !( phi_on_centroid);
