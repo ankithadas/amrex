@@ -582,8 +582,6 @@ void mlebabeclap_gsrb (int i, int j, int k, int n,
                        Box const& vbox, int redblack) noexcept
 {
     constexpr T omega = 1.15;
-    const auto vlo = amrex::lbound(vbox);
-    const auto vhi = amrex::ubound(vbox);
 
     const T dhx = beta*dxinv[0]*dxinv[0];
     const T dhy = beta*dxinv[1]*dxinv[1];
@@ -591,6 +589,9 @@ void mlebabeclap_gsrb (int i, int j, int k, int n,
 
     if ((i+j+k+redblack) % 2 == 0)
     {
+        const auto vlo = amrex::lbound(vbox);
+        const auto vhi = amrex::ubound(vbox);
+
         auto const flag = ebdata.get<EBData_t::cellflag>(i,j,k);
         if (flag.isCovered())
         {

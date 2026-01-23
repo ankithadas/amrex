@@ -392,14 +392,15 @@ void mlebabeclap_gsrb (int i, int j, int k, int n,
                        bool is_dirichlet, bool beta_on_centroid, bool phi_on_centroid,
                        Box const& vbox, int redblack) noexcept
 {
-    const auto vlo = amrex::lbound(vbox);
-    const auto vhi = amrex::ubound(vbox);
     T dhx = beta*dxinv[0]*dxinv[0];
     T dhy = beta*dxinv[1]*dxinv[1];
     T dh  = beta*dxinv[0]*dxinv[1];
 
     if ((i+j+k+redblack) % 2 == 0)
     {
+        const auto vlo = amrex::lbound(vbox);
+        const auto vhi = amrex::ubound(vbox);
+
         auto const flag = ebdata.get<EBData_t::cellflag>(i,j,k);
         if (flag.isCovered())
         {
@@ -533,14 +534,14 @@ void mlebabeclap_gsrb (int i, int j, int k, int n,
                 T vfrcinv = (T(1.0)/kappa);
                 T gamma = alpha*a(i,j,k) + vfrcinv *
                     (dhx*(apxm*sxm-apxp*sxp) +
-                        dhy*(apym*sym-apyp*syp));
+                     dhy*(apym*sym-apyp*syp));
                 T rho = -vfrcinv *
                     (dhx*(apxm*fxm-apxp*fxp) +
-                        dhy*(apym*fym-apyp*fyp));
+                     dhy*(apym*fym-apyp*fyp));
 
                 T delta = -vfrcinv *
                     (dhx*(apxm*oxm-apxp*oxp) +
-                        dhy*(apym*oym-apyp*oyp));
+                     dhy*(apym*oym-apyp*oyp));
 
                 if (is_dirichlet) {
                     T dapx = (apxm-apxp) / dxinv[0];
