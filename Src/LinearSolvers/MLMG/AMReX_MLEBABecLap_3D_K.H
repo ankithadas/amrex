@@ -565,7 +565,8 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 void mlebabeclap_gsrb (int i, int j, int k, int n,
                        Array4<T> const& phi, Array4<T const> const& rhs,
                        T alpha, Array4<T const> const& a,
-                       T beta, GpuArray<T,AMREX_SPACEDIM> const& dxinv,
+                       T dhx, T dhy, T dhz,
+                       // T beta, GpuArray<T,AMREX_SPACEDIM> const& dxinv,
                        Array4<T const> const& bX, Array4<T const> const& bY,
                        Array4<T const> const& bZ,
                        Array4<int const> const& m0, Array4<int const> const& m2,
@@ -583,9 +584,9 @@ void mlebabeclap_gsrb (int i, int j, int k, int n,
 {
     constexpr T omega = 1.15;
 
-    const T dhx = beta*dxinv[0]*dxinv[0];
-    const T dhy = beta*dxinv[1]*dxinv[1];
-    const T dhz = beta*dxinv[2]*dxinv[2];
+    // const T dhx = beta*dxinv[0]*dxinv[0];
+    // const T dhy = beta*dxinv[1]*dxinv[1];
+    // const T dhz = beta*dxinv[2]*dxinv[2];
 
     if ((i+j+k+redblack) % 2 == 0)
     {
