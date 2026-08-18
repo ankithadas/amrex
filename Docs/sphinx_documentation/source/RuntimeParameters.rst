@@ -811,7 +811,7 @@ Embedded Boundary
    single-valued cut cells from a marching-cubes (MC33) surface; it is
    available in 3D on Cartesian grids with cubic cells only, and it is not
    compatible with :cpp:`amrex::EB2::BuildMultiValuedMultiCut`. See
-   :ref:`sec:EB:ebinit:mc`. The former STL-only key
+   :ref:`Marching-Cubes Geometry Generation <sec:EB:ebinit:mc>`. The former STL-only key
    ``eb2.stl_geometry_method`` is still accepted as a deprecated alias.
 
 .. py:data:: eb2.mc_stl_file
