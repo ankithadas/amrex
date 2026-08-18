@@ -34,7 +34,7 @@ IndexSpaceSTL::IndexSpaceSTL (const std::string& stl_file, Real stl_scale,
     m_ngrow.push_back(ngrow_finest);
     m_stllevel.reserve(max_coarsening_level+1);
     m_stllevel.emplace_back(this, stl_tools, geom, EB2::max_grid_size, ngrow_finest,
-                            extend_domain_face, num_coarsen_opt, support_mvmc);
+                            extend_domain_face, num_coarsen_opt, support_mvmc, true);
 
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(max_coarsening_level == 0 || support_mvmc == false,
                                      "We don't support multiple levels when multi-valued and multi-cut are enabled.");

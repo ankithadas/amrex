@@ -32,7 +32,7 @@ IndexSpaceImp<G>::IndexSpaceImp (const G& gshop, const Geometry& geom,
     m_ngrow.push_back(ngrow_finest);
     m_gslevel.reserve(max_coarsening_level+1);
     m_gslevel.emplace_back(this, gshop, geom, EB2::max_grid_size, ngrow_finest, extend_domain_face,
-                           num_coarsen_opt);
+                           num_coarsen_opt, true);
 
     for (int ilev = 1; ilev <= max_coarsening_level; ++ilev)
     {

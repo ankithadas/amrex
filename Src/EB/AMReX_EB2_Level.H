@@ -250,7 +250,7 @@ public:
      */
     GShopLevel (IndexSpace const* is, G const& gshop, const Geometry& geom, int max_grid_size,
                 int ngrow, bool extend_domain_face, int num_crse_opt,
-                bool finest_level = true);
+                bool finest_level);
     /**
      * \brief Construct a coarse level by coarsening \p fineLevel.
      */
@@ -285,7 +285,7 @@ public:
      */
     void define_fine_with_method (G const& gshop, const Geometry& geom,
                                   int max_grid_size, int ngrow, bool extend_domain_face,
-                                  int num_crse_opt, bool finest_level = true);
+                                  int num_crse_opt, bool finest_level);
 
     /**
      * \brief Build a regular (no EB) level.
