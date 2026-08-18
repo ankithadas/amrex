@@ -57,7 +57,7 @@ IndexSpaceImp<G>::IndexSpaceImp (const G& gshop, const Geometry& geom,
                     amrex::Abort("Failed to build required coarse EB level "+std::to_string(ilev));
                 } else {
                     m_gslevel.emplace_back(this, gshop, cgeom, EB2::max_grid_size, ng, extend_domain_face,
-                                           num_coarsen_opt-ilev);
+                                           num_coarsen_opt-ilev, false);
                 }
             } else {
                 break;
@@ -89,7 +89,7 @@ IndexSpaceImp<G>::IndexSpaceImp (const G& gshop, const Vector<Geometry>& geom,
         Geometry cgeom = geom[ilev];
         Box cdomain = cgeom.Domain();
         m_gslevel.emplace_back(this, gshop, cgeom, EB2::max_grid_size, ng, extend_domain_face,
-                                           num_coarsen_opt-ilev);
+                                           num_coarsen_opt-ilev, ilev == 0);
         m_geom.push_back(cgeom);
         m_domain.push_back(cdomain);
         m_ngrow.push_back(ng);

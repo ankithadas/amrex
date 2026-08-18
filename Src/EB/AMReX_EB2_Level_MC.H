@@ -27,9 +27,12 @@
  * Every other source, i.e. any EB2::GeometryShop implicit function, is served
  * by the generic adapters below, which reuse the source's `fillFab` and
  * `getIntercept` (Brent root finding on cut edges).
+ *
+ * These are implementation details of GShopLevel; they are not part of the
+ * public EB2 interface.
  */
 
-namespace amrex::EB2 {
+namespace amrex::EB2::detail {
 
 //! Geometry sources with dedicated marching-cubes sampling (e.g. STLtools).
 template <class G>
@@ -85,9 +88,10 @@ void fill_marching_cubes_levelset (G const& gshop, MultiFab& sdf, Geometry const
         // implicit function, i.e. it bounds the crossing position on the
         // incident edges as a fraction of the cell size, so it is independent
         // of the function's units; it matches the sliver tolerance below which
-        // the marching-cubes moments reject a cut.  Only valid nodes are
-        // updated (their edge neighbors are all present after FillBoundary),
-        // so every FAB sharing a node makes the same decision.
+        // the marching-cubes moments reject a cut.  The decision reads the
+        // unsnapped values from a copy of the FAB, so it does not depend on
+        // the order in which nodes are visited; valid nodes are updated and
+        // OverrideSync then makes shared nodes identical across FABs.
 #ifdef AMREX_USE_FLOAT
         constexpr Real snap_factor = 1.e-4_rt;
 #else
@@ -96,14 +100,18 @@ void fill_marching_cubes_levelset (G const& gshop, MultiFab& sdf, Geometry const
         for (MFIter mfi(sdf); mfi.isValid(); ++mfi) {
             Box const vbx = mfi.validbox();
             AMREX_ALWAYS_ASSERT(sdf[mfi].box().contains(amrex::grow(vbx,1)));
+            FArrayBox unsnapped(amrex::grow(vbx,1), 1, The_Arena());
+            Elixir unsnapped_eli = unsnapped.elixir();
+            unsnapped.copy<RunOn::Device>(sdf[mfi], amrex::grow(vbx,1));
+            auto const src = unsnapped.const_array();
             auto const a = sdf.array(mfi);
             ParallelFor(vbx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
             {
-                Real const v = a(i,j,k);
+                Real const v = src(i,j,k);
                 Real scale = std::abs(v);
-                scale = amrex::max(scale, std::abs(a(i-1,j,k)), std::abs(a(i+1,j,k)));
-                scale = amrex::max(scale, std::abs(a(i,j-1,k)), std::abs(a(i,j+1,k)));
-                scale = amrex::max(scale, std::abs(a(i,j,k-1)), std::abs(a(i,j,k+1)));
+                scale = amrex::max(scale, std::abs(src(i-1,j,k)), std::abs(src(i+1,j,k)));
+                scale = amrex::max(scale, std::abs(src(i,j-1,k)), std::abs(src(i,j+1,k)));
+                scale = amrex::max(scale, std::abs(src(i,j,k-1)), std::abs(src(i,j,k+1)));
                 if (std::abs(v) <= snap_factor*scale) {
                     a(i,j,k) = 0.0_rt;
                 }
@@ -194,6 +202,6 @@ void fill_marching_cubes_edge_intersections (G const& gshop, FArrayBox const& sd
     }
 }
 
-}
+} // namespace amrex::EB2::detail
 
 #endif

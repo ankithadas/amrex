@@ -15,7 +15,7 @@ IndexSpaceSTL::IndexSpaceSTL (const std::string& stl_file, Real stl_scale,
     STLtools stl_tools;
     // The marching-cubes generator requires a watertight, consistently oriented
     // STL; the flag enables that validation when the file is read.
-    stl_tools.setUseMarchingCubes(geometryMethod() == GeometryMethod::marching_cubes);
+    stl_tools.setUseMarchingCubes(GetGeometryMethod() == GeometryMethod::marching_cubes);
     stl_tools.setBVHOptimization(bvh_optimization);
     stl_tools.read_stl_file(stl_file, stl_scale, stl_center, stl_reverse_normal);
 
@@ -62,7 +62,8 @@ IndexSpaceSTL::IndexSpaceSTL (const std::string& stl_file, Real stl_scale,
                     amrex::Abort("Failed to build required coarse EB level "+std::to_string(ilev));
                 } else {
                     m_stllevel.emplace_back(this, stl_tools, cgeom, EB2::max_grid_size, ng,
-                                            extend_domain_face, num_coarsen_opt-ilev, support_mvmc);
+                                            extend_domain_face, num_coarsen_opt-ilev, support_mvmc,
+                                            false);
                 }
             } else {
                 break;

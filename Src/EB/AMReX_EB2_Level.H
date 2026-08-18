@@ -53,7 +53,7 @@ enum class GeometryMethod : int {
 };
 
 //! Generator selected at runtime by `eb2.geometry_method` (default `legacy`).
-GeometryMethod geometryMethod ();
+GeometryMethod GetGeometryMethod ();
 
 //! Runtime parameters shared by the small-cell/multi-cut repair loops.
 struct RepairParameters
@@ -64,7 +64,7 @@ struct RepairParameters
 };
 
 //! Read `eb2.small_volfrac`, `eb2.maxiter`, and `eb2.cover_multiple_cuts`.
-RepairParameters readRepairParameters ();
+RepairParameters GetRepairParameters ();
 
 class Level
 {
@@ -226,7 +226,7 @@ protected:
      * optionally writes `eb2.mc_stl_file`, and exports m_levelset.
      */
     void build_marching_cubes_level (Geometry const& geom, bool extend_domain_face,
-                                     LayoutData<MC::MCFab>& mc_fabs);
+                                     LayoutData<MC::MCFab>& mc_fabs, bool write_stl_output);
 #endif
 
 private:
@@ -249,7 +249,8 @@ public:
      * \brief Build a level directly from a GeometryShop object.
      */
     GShopLevel (IndexSpace const* is, G const& gshop, const Geometry& geom, int max_grid_size,
-                int ngrow, bool extend_domain_face, int num_crse_opt);
+                int ngrow, bool extend_domain_face, int num_crse_opt,
+                bool finest_level = true);
     /**
      * \brief Construct a coarse level by coarsening \p fineLevel.
      */
@@ -271,15 +272,20 @@ public:
      */
     void define_fine_marching_cubes (G const& gshop, const Geometry& geom,
                                      int max_grid_size, int ngrow,
-                                     bool extend_domain_face, int num_crse_opt);
+                                     bool extend_domain_face, int num_crse_opt,
+                                     bool finest_level);
 #endif
     /**
-     * \brief Define data for the finest level using the generator selected by
-     *        EB2::geometryMethod().
+     * \brief Define data for a level directly from the geometry source using the
+     *        generator selected by EB2::GetGeometryMethod().
+     *
+     * \p finest_level is false when a coarse level is rebuilt from the
+     * geometry source rather than by coarsening; it only controls diagnostics
+     * such as `eb2.mc_stl_file`, which is written for the finest level only.
      */
     void define_fine_with_method (G const& gshop, const Geometry& geom,
                                   int max_grid_size, int ngrow, bool extend_domain_face,
-                                  int num_crse_opt);
+                                  int num_crse_opt, bool finest_level = true);
 
     /**
      * \brief Build a regular (no EB) level.
@@ -308,7 +314,8 @@ GShopLevel<G>::GShopLevel (IndexSpace const* is, const Geometry& geom)
 
 template <typename G>
 GShopLevel<G>::GShopLevel (IndexSpace const* is, G const& gshop, const Geometry& geom,
-                           int max_grid_size, int ngrow, bool extend_domain_face, int num_crse_opt)
+                           int max_grid_size, int ngrow, bool extend_domain_face, int num_crse_opt,
+                           bool finest_level)
     : Level(is, geom)
 {
     if (std::is_same_v<typename G::FunctionType, AllRegularIF>) {
@@ -317,19 +324,22 @@ GShopLevel<G>::GShopLevel (IndexSpace const* is, G const& gshop, const Geometry&
         return;
     }
 
-    define_fine_with_method(gshop, geom, max_grid_size, ngrow, extend_domain_face, num_crse_opt);
+    define_fine_with_method(gshop, geom, max_grid_size, ngrow, extend_domain_face, num_crse_opt,
+                            finest_level);
 }
 
 template <typename G>
 void
 GShopLevel<G>::define_fine_with_method (G const& gshop, const Geometry& geom, int max_grid_size,
-                                        int ngrow, bool extend_domain_face, int num_crse_opt)
+                                        int ngrow, bool extend_domain_face, int num_crse_opt,
+                                        bool finest_level)
 {
-    if (geometryMethod() == GeometryMethod::marching_cubes) {
+    if (GetGeometryMethod() == GeometryMethod::marching_cubes) {
 #if (AMREX_SPACEDIM == 3)
         define_fine_marching_cubes(gshop, geom, max_grid_size, ngrow, extend_domain_face,
-                                   num_crse_opt);
+                                   num_crse_opt, finest_level);
 #else
+        amrex::ignore_unused(finest_level);
         amrex::Abort("eb2.geometry_method = marching_cubes is only available in 3D");
 #endif
     } else {
@@ -459,7 +469,7 @@ GShopLevel<G>::define_fine (G const& gshop, const Geometry& geom,
 {
     BL_PROFILE("EB2::GShopLevel()-fine");
 
-    auto const repair = readRepairParameters();
+    auto const repair = GetRepairParameters();
     Real const small_volfrac = repair.small_volfrac;
     bool const cover_multiple_cuts = repair.cover_multiple_cuts;
     int const maxiter = repair.maxiter;
@@ -728,7 +738,8 @@ template <typename G>
 void
 GShopLevel<G>::define_fine_marching_cubes (G const& gshop, const Geometry& geom,
                                            int max_grid_size, int ngrow,
-                                           bool extend_domain_face, int num_crse_opt)
+                                           bool extend_domain_face, int num_crse_opt,
+                                           bool finest_level)
 {
     BL_PROFILE("EB2::GShopLevel()-fine-marching-cubes");
 
@@ -747,13 +758,13 @@ GShopLevel<G>::define_fine_marching_cubes (G const& gshop, const Geometry& geom,
                  mf_info);
 
     // Geometry-source specific work: nodal MC level set and exact edge crossings.
-    fill_marching_cubes_levelset(gshop, m_sdf, geom);
+    detail::fill_marching_cubes_levelset(gshop, m_sdf, geom);
     LayoutData<MC::MCFab> mc_fabs = define_marching_cubes_caches();
     for (MFIter mfi(m_sdf, MFItInfo().DisableDeviceSync()); mfi.isValid(); ++mfi) {
-        fill_marching_cubes_edge_intersections(gshop, m_sdf[mfi], geom, mc_fabs[mfi]);
+        detail::fill_marching_cubes_edge_intersections(gshop, m_sdf[mfi], geom, mc_fabs[mfi]);
     }
 
-    build_marching_cubes_level(geom, extend_domain_face, mc_fabs);
+    build_marching_cubes_level(geom, extend_domain_face, mc_fabs, finest_level);
 }
 #endif
 

@@ -55,7 +55,7 @@ bool ExtendDomainFace ()
     return extend_domain_face;
 }
 
-GeometryMethod geometryMethod ()
+GeometryMethod GetGeometryMethod ()
 {
     // Queried at build time rather than in Initialize so that parameters set
     // programmatically after amrex::Initialize are honored.
@@ -63,13 +63,13 @@ GeometryMethod geometryMethod ()
     std::string method_name("legacy");
     if (pp.query("stl_geometry_method", method_name)) {
         static bool warned = false;
-        if (!warned && amrex::Verbose() > 0) {
+        if (!warned) {
             amrex::Warning("eb2.stl_geometry_method is deprecated; use eb2.geometry_method, "
                            "which applies to every eb2.geom_type");
+            warned = true;
         }
-        warned = true;
     }
-    pp.query("geometry_method", method_name);
+    pp.queryAdd("geometry_method", method_name);
     if (method_name == "legacy") {
         return GeometryMethod::legacy;
     } else if (method_name == "marching_cubes") {

@@ -98,9 +98,8 @@ struct Triangle
 };
 
 //! Minimal container holding marching-cubes output for one FAB.
-class MCFab
+struct MCFab
 {
-public:
     //! Per-cell triangle/interior ranges and resolved MC33 face decisions.
     BaseFab<int> m_cell_data;
     //! Exact normalized STL crossings on Cartesian edges, when available.
@@ -119,14 +118,21 @@ void marching_cubes (Geometry const& geom, FArrayBox& sdf_fab, MCFab& mc_fab);
  * \brief Build Cartesian-face aperture fractions and centroids from the MC
  *        signed-distance field.
  *
- * \p bx is cell-centered; all faces surrounding it are updated.
+ * \p bx is cell-centered; all faces surrounding it are updated.  Faces whose
+ * fluid polygon is degenerate (for example a four-crossing face whose
+ * crossings all sit on repaired zero nodes) receive zero aperture and are
+ * marked with 1 in \p rejected_x / \p rejected_y / \p rejected_z where those
+ * arrays contain the face, so the nodal repair pass covers them.
  *
- * \return Number of faces with unsupported contour topology.
+ * \return {number of faces whose two cells resolved the MC33 ambiguity
+ *          differently (an invariant violation), number of degenerate faces
+ *          marked for repair}.
  */
-int build_face_fractions (
+GpuArray<int,2> build_face_fractions (
     Box const& bx, MCFab const& mc_fab, FArrayBox const& sdf,
     FArrayBox& apx, FArrayBox& apy, FArrayBox& apz,
-    FArrayBox& fcx, FArrayBox& fcy, FArrayBox& fcz);
+    FArrayBox& fcx, FArrayBox& fcy, FArrayBox& fcz,
+    IArrayBox& rejected_x, IArrayBox& rejected_y, IArrayBox& rejected_z);
 
 /**
  * \brief Build EB edge-centroid data from the MC signed-distance field.
@@ -174,7 +180,10 @@ int build_cell_topology (
 /**
  * \brief Mark Cartesian faces with more than one resolved fluid aperture.
  *
- * \return Number of rejected faces across all three coordinate directions.
+ * Marks are OR-ed into the arrays, so faces already rejected by
+ * build_face_fractions are kept.
+ *
+ * \return Number of newly rejected faces across all three coordinate directions.
  */
 int mark_faces_for_cleanup (
     Box const& bx, MCFab const& mc_fab, FArrayBox const& sdf,
@@ -188,8 +197,9 @@ int mark_faces_for_cleanup (
  * topology has more than one fluid component, or its volume fraction is below
  * \p small_volfrac. Face-aperture rejection is handled separately.
  *
- * \return Counts of topology and small-cell rejections, respectively. The
- *         corresponding bits in \p rejected preserve those reasons.
+ * \return Counts of topology and small-cell rejections, respectively.
+ *         \p rejected records the reason of each rejected cell as one of the
+ *         RejectionReason values (topology takes precedence) and 0 otherwise.
  */
 GpuArray<int,2> mark_cells_for_cleanup (
     Box const& bx, MCFab const& mc_fab, FArrayBox const& sdf,

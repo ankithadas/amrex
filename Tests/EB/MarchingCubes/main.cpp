@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <utility>
@@ -40,6 +41,93 @@ struct HostSphereIF
         return m_fluid_inside ? v : -v;
     }
 };
+
+/**
+ * Union of two overlapping spheres (fluid outside) with the implicit function
+ * multiplied by an arbitrary scale.  The marching-cubes reconstruction,
+ * including its ambiguous-face decisions and the nodal repair, must not depend
+ * on the units of the implicit function.
+ */
+struct ScaledTwoSphereIF : amrex::GPUable
+{
+    Real m_scale;
+
+    AMREX_GPU_HOST_DEVICE Real operator() (AMREX_D_DECL(Real x, Real y, Real z)) const noexcept
+    {
+        constexpr Real radius = 0.6_rt;
+        constexpr Real offset = 0.35_rt;
+        Real const d1 = std::sqrt((x-offset)*(x-offset) + y*y + z*z);
+        Real const d2 = std::sqrt((x+offset)*(x+offset) + y*y + z*z);
+        // Positive inside the body (EB2 convention), fluid outside.
+        return m_scale*amrex::max(radius-d1, radius-d2);
+    }
+
+    Real operator() (RealArray const& p) const noexcept
+    {
+        return this->operator()(AMREX_D_DECL(p[0], p[1], p[2]));
+    }
+};
+
+//! Build the same geometry with the implicit function scaled by 1e-6, 1 and 1e6
+//! and require the same fluid volume and repaired-node count.
+void validate_scale_invariance ()
+{
+    Box const domain(IntVect(0), IntVect(47));
+    Geometry const geom(domain, RealBox({-1.2_rt, -1.2_rt, -1.2_rt}, {1.2_rt, 1.2_rt, 1.2_rt}),
+                        0, {0, 0, 0});
+    BoxArray ba(domain);
+    ba.maxSize(16);
+    DistributionMapping const dm(ba);
+
+    // {scale of the implicit function, EB2 box size used for the build}: the
+    // reconstruction must not depend on either.
+    struct Variant { Real scale; int eb_max_grid_size; };
+    Variant const variants[] = {{1.e-6_rt, 16}, {1.0_rt, 16}, {1.e6_rt, 16}, {1.0_rt, 8}};
+    int const saved_max_grid_size = EB2::max_grid_size;
+    Real reference_volume = -1.0_rt;
+    Long reference_zero_nodes = -1;
+    for (auto const& [scale, eb_max_grid_size] : variants) {
+        EB2::max_grid_size = eb_max_grid_size;
+        EB2::Build(EB2::makeShop(ScaledTwoSphereIF{{}, scale}), geom, 0, 0, 4);
+        auto factory = makeEBFabFactory(geom, ba, dm, {1, 1, 1}, EBSupport::full);
+        Real const volume = factory->getVolFrac().sum() * geom.CellSize(0) * geom.CellSize(1)
+                            * geom.CellSize(2);
+        auto const& levelset = factory->getLevelSet();
+        Gpu::DeviceScalar<Long> zero_node_count(static_cast<Long>(0));
+        Long* const zero_nodes = zero_node_count.dataPtr();
+        for (MFIter mfi(levelset); mfi.isValid(); ++mfi) {
+            auto const phi = levelset.const_array(mfi);
+            ParallelFor(mfi.validbox(), [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+                if (phi(i, j, k) == 0.0_rt) {
+                    Gpu::Atomic::AddNoRet(zero_nodes, static_cast<Long>(1));
+                }
+            });
+        }
+        Long global_zero_nodes = zero_node_count.dataValue();
+        ParallelAllReduce::Sum(global_zero_nodes, ParallelContext::CommunicatorSub());
+        amrex::Print() << "Scale " << scale << ", eb2.max_grid_size " << eb_max_grid_size
+                       << ": fluid volume " << volume
+                       << ", zero level-set nodes " << global_zero_nodes << "\n";
+        // The variants share every sign decision, so only the root finding
+        // (scale) and the summation order (decomposition) may differ at
+        // roundoff level.
+        if (reference_volume < 0.0_rt) {
+            reference_volume = volume;
+            reference_zero_nodes = global_zero_nodes;
+        } else {
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+                std::abs(volume - reference_volume) <= 1.e-8_rt * reference_volume,
+                "Marching-cubes fluid volume depends on the scale of the implicit "
+                "function or on the box decomposition");
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+                global_zero_nodes == reference_zero_nodes,
+                "Marching-cubes nodal repair depends on the scale of the implicit "
+                "function or on the box decomposition");
+        }
+        EB2::IndexSpace::pop();
+    }
+    EB2::max_grid_size = saved_max_grid_size;
+}
 
 bool resolved_bottom_face_is_fluid_connected (GpuArray<Real, 8> const& values)
 {
@@ -113,6 +201,31 @@ void validate_mc33_vertex_indices ()
             AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
                 interior_offset == edge_vertex_count,
                 "MC33 interior vertex overlaps the Cartesian-edge vertex block");
+            // The interior vertex is the average of the crossings on the 12
+            // cube edges, so it must be their centroid and lie inside the cell.
+            Gpu::PinnedVector<Real> vx(nvertices), vy(nvertices), vz(nvertices);
+            Gpu::dtoh_memcpy(vx.data(), result.m_vertices.x.data(), nvertices * sizeof(Real));
+            Gpu::dtoh_memcpy(vy.data(), result.m_vertices.y.data(), nvertices * sizeof(Real));
+            Gpu::dtoh_memcpy(vz.data(), result.m_vertices.z.data(), nvertices * sizeof(Real));
+            Gpu::streamSynchronize();
+            Real cx = 0.0_rt, cy = 0.0_rt, cz = 0.0_rt;
+            for (int n = 0; n < edge_vertex_count; ++n) {
+                cx += vx[n]; cy += vy[n]; cz += vz[n];
+            }
+            cx /= static_cast<Real>(edge_vertex_count);
+            cy /= static_cast<Real>(edge_vertex_count);
+            cz /= static_cast<Real>(edge_vertex_count);
+            Real const tol = 16.0_rt * std::numeric_limits<Real>::epsilon();
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+                std::abs(vx[interior_offset] - cx) <= tol &&
+                std::abs(vy[interior_offset] - cy) <= tol &&
+                std::abs(vz[interior_offset] - cz) <= tol,
+                "MC33 interior vertex is not the centroid of the edge crossings");
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+                vx[interior_offset] >= 0.0_rt && vx[interior_offset] <= 1.0_rt &&
+                vy[interior_offset] >= 0.0_rt && vy[interior_offset] <= 1.0_rt &&
+                vz[interior_offset] >= 0.0_rt && vz[interior_offset] <= 1.0_rt,
+                "MC33 interior vertex lies outside the cell");
         }
 
         Gpu::PinnedVector<int> v1(ntri);
@@ -170,8 +283,15 @@ void validate_exact_ambiguous_face_fraction ()
     FArrayBox fcx(amrex::surroundingNodes(cell_box, 0), 2);
     FArrayBox fcy(amrex::surroundingNodes(cell_box, 1), 2);
     FArrayBox fcz(amrex::surroundingNodes(cell_box, 2), 2);
-    int const errors =
-        MC::build_face_fractions(cell_box, mc_fab, sdf, apx, apy, apz, fcx, fcy, fcz);
+    IArrayBox rejected_x(amrex::surroundingNodes(cell_box, 0), 1);
+    IArrayBox rejected_y(amrex::surroundingNodes(cell_box, 1), 1);
+    IArrayBox rejected_z(amrex::surroundingNodes(cell_box, 2), 1);
+    rejected_x.setVal<RunOn::Device>(0);
+    rejected_y.setVal<RunOn::Device>(0);
+    rejected_z.setVal<RunOn::Device>(0);
+    GpuArray<int, 2> const face_counts = MC::build_face_fractions(
+        cell_box, mc_fab, sdf, apx, apy, apz, fcx, fcy, fcz, rejected_x, rejected_y, rejected_z);
+    int const errors = face_counts[0] + face_counts[1];
 
     Gpu::Buffer<Real> area_buffer(1);
     Box const sample_box = amrex::makeSingleCellBox(IntVect(0), apz.box().ixType());
@@ -237,7 +357,7 @@ void validate_narrow_band_levelset ()
     exact.FillBoundary(geom.periodicity());
     stl.fillMarchingCubesLevelSet(narrow, narrow.nGrowVect(), geom);
 
-    Gpu::Buffer<Long> errors(4);
+    Gpu::Buffer<Long> errors(5);
     std::fill_n(errors.hostData(), errors.size(), static_cast<Long>(0));
     errors.copyToDeviceAsync();
     Long* const error = errors.data();
@@ -256,7 +376,13 @@ void validate_narrow_band_levelset ()
                 Real const lo = band(i, j, k);
                 Real const hi = band(i + di, j + dj, k + dk);
                 Real const refined = crossing(i, j, k);
-                if ((lo > 0.0_rt) != (hi > 0.0_rt) && !amrex::isnan(refined)) {
+                // Edges without an exact STL crossing keep the sentinel; a
+                // sign-changing edge inside the band must always have one.
+                if ((lo > 0.0_rt) != (hi > 0.0_rt)) {
+                    if (refined == MC::invalid_edge_intersection) {
+                        Gpu::Atomic::AddNoRet(error + 4, static_cast<Long>(1));
+                        return;
+                    }
                     Gpu::Atomic::AddNoRet(error + 2, static_cast<Long>(1));
                     Real const linear = lo / (lo - hi);
                     if (std::abs(refined - linear) >
@@ -303,8 +429,9 @@ void validate_narrow_band_levelset ()
         });
     }
     errors.copyToHost();
-    GpuArray<Long, 4> global_errors{errors.hostData()[0], errors.hostData()[1],
-                                    errors.hostData()[2], errors.hostData()[3]};
+    GpuArray<Long, 5> global_errors{errors.hostData()[0], errors.hostData()[1],
+                                    errors.hostData()[2], errors.hostData()[3],
+                                    errors.hostData()[4]};
     ParallelAllReduce::Sum(global_errors.data(), static_cast<int>(global_errors.size()),
                            ParallelContext::CommunicatorSub());
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
@@ -316,6 +443,8 @@ void validate_narrow_band_levelset ()
                                      "Exact STL refinement found no sign-changing Cartesian edges");
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
         global_errors[3] > 0, "Exact STL refinement did not move any sampled-SDF edge crossing");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        global_errors[4] == 0, "A sign-changing edge in the band has no exact STL crossing");
 }
 
 char const* execution_backend () noexcept
@@ -348,6 +477,8 @@ void main_main ()
         validate_exact_ambiguous_face_fraction();
         validate_nodal_stl_face_levelset();
     }
+    bool scale_invariance_test = false;
+    pp.query("scale_invariance_test", scale_invariance_test);
 
     int nx = 64;
     int ny = 64;
@@ -368,6 +499,8 @@ void main_main ()
     std::string geom_type("stl");
     std::string api_build;
     bool api_all_levels = false;
+    bool allow_full_volume_cut_cells = false;
+    std::vector<int> is_periodic{0, 0, 0};
     std::string stl_file("cube.stl");
     Real stl_scale = 1.0;
     std::vector<Real> stl_center{0.0, 0.0, 0.0};
@@ -410,6 +543,8 @@ void main_main ()
             ymax = prob_hi[1];
             zmax = prob_hi[2];
         }
+        ppgeom.queryarr("is_periodic", is_periodic);
+        pp.query("allow_full_volume_cut_cells", allow_full_volume_cut_cells);
 
         ParmParse ppeb2("eb2");
         ppeb2.queryAdd("geom_type", geom_type);
@@ -443,7 +578,12 @@ void main_main ()
             int has_fluid_inside = 0;
             ppeb2.queryAdd("box_has_fluid_inside", has_fluid_inside);
             fluid_inside = has_fluid_inside != 0;
-            body_volume = (hi[0]-lo[0])*(hi[1]-lo[1])*(hi[2]-lo[2]);
+            // Only the part of the box inside the domain contributes.
+            Real const clipped[3] = {
+                amrex::max(0.0_rt, amrex::min(hi[0], xmax) - amrex::max(lo[0], xmin)),
+                amrex::max(0.0_rt, amrex::min(hi[1], ymax) - amrex::max(lo[1], ymin)),
+                amrex::max(0.0_rt, amrex::min(hi[2], zmax) - amrex::max(lo[2], zmin))};
+            body_volume = clipped[0]*clipped[1]*clipped[2];
         } else if (geom_type == "cylinder") {
             Real radius = 0.5_rt;
             Real height = -1.0_rt;
@@ -465,10 +605,15 @@ void main_main ()
     if (narrow_band_test) {
         validate_narrow_band_levelset();
     }
+    if (scale_invariance_test) {
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(eb_method == "marching_cubes",
+                                         "scale_invariance_test requires marching_cubes");
+        validate_scale_invariance();
+    }
 
     Geometry geom(Box(IntVect(0), IntVect(AMREX_D_DECL(nx - 1, ny - 1, nz - 1))),
                   RealBox({AMREX_D_DECL(xmin, ymin, zmin)}, {AMREX_D_DECL(xmax, ymax, zmax)}), 0,
-                  {AMREX_D_DECL(0, 0, 0)});
+                  {AMREX_D_DECL(is_periodic[0], is_periodic[1], is_periodic[2])});
     BoxArray ba(geom.Domain());
     ba.maxSize(max_grid_size);
     DistributionMapping dm(ba);
@@ -517,6 +662,27 @@ void main_main ()
     std::string eb_surface_stl_file;
     if (ParmParse("eb2").query("eb_surface_stl_file", eb_surface_stl_file)) {
         WriteEBSurfaceSTL(ba, dm, geom, factory.get(), eb_surface_stl_file);
+    }
+    std::string mc_stl_file;
+    if (ParmParse("eb2").query("mc_stl_file", mc_stl_file) && eb_method == "marching_cubes") {
+        // The file holds the converged triangulation of the finest level.
+        Long facets = 0;
+        if (ParallelDescriptor::IOProcessor()) {
+            std::ifstream ifs(mc_stl_file);
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(ifs.good(), "eb2.mc_stl_file was not written");
+            std::string line;
+            while (std::getline(ifs, line)) {
+                if (line.find("facet normal") != std::string::npos) { ++facets; }
+            }
+        }
+        ParallelDescriptor::Bcast(&facets, 1);
+        amrex::Print() << "Marching-cubes STL facets: " << facets << "\n";
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(facets > 0, "eb2.mc_stl_file contains no facets");
+        Long expected_facets = -1;
+        pp.query("expected_mc_stl_facets", expected_facets);
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(expected_facets < 0 || facets == expected_facets,
+                                         "eb2.mc_stl_file facet count differs from the "
+                                         "expected finest-level count");
     }
     auto const& volfrac = factory->getVolFrac();
     Real const fluid_volume =
@@ -771,8 +937,19 @@ void main_main ()
     AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
         global_topology_counts[5] == 0,
         "EB boundary normals disagree with repaired face-aperture closure");
+    // A single-valued cell with unit volume and a nonzero boundary area owns
+    // an EB patch coincident with one of its faces or nodes.  This state only
+    // arises when the surface passes exactly through grid nodes, either
+    // because the geometry does (allow_full_volume_cut_cells = 1) or because
+    // the nodal repair moved nodes onto the surface.
+    if (!allow_full_volume_cut_cells && repaired_nodes == 0) {
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+            global_topology_counts[4] == 0,
+            "A single-valued cell has unit volume and a nonzero boundary area");
+    }
     amrex::Print() << "Single-valued cells: " << global_topology_counts[1]
-                   << ", retained multi-valued cells: " << global_topology_counts[3] << "\n";
+                   << ", retained multi-valued cells: " << global_topology_counts[3]
+                   << ", full-volume cut cells: " << global_topology_counts[4] << "\n";
     amrex::Print() << std::setprecision(std::numeric_limits<Real>::max_digits10)
                    << "MC_TEST_SIGNATURE backend=" << execution_backend()
                    << " precision=" << 8 * sizeof(Real) << " method=" << eb_method

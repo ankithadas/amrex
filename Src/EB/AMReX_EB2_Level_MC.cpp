@@ -48,11 +48,11 @@ Level::define_marching_cubes_caches ()
 
 void
 Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face,
-                                   LayoutData<MC::MCFab>& mc_fabs)
+                                   LayoutData<MC::MCFab>& mc_fabs, bool write_stl_output)
 {
     BL_PROFILE("EB2::Level::build_marching_cubes_level");
 
-    auto const repair = readRepairParameters();
+    auto const repair = GetRepairParameters();
     Real const small_volfrac = repair.small_volfrac;
     int const maxiter = repair.maxiter;
     bool const cover_multiple_cuts = repair.cover_multiple_cuts;
@@ -122,15 +122,16 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
         m_bndrycent.setVal(-1.0_rt, 0, AMREX_SPACEDIM, m_bndrycent.nGrowVect());
         m_bndrynorm.setVal(0.0_rt, 0, AMREX_SPACEDIM, m_bndrynorm.nGrowVect());
 
-        int face_geometry_errors = 0;
+        int face_decision_errors = 0;
+        int degenerate_faces = 0;
         int cell_geometry_errors = 0;
         int face_rejections = 0;
         int topology_rejections = 0;
         int small_cell_rejections = 0;
 #ifdef AMREX_USE_OMP
 #pragma omp parallel if (Gpu::notInLaunchRegion())                                                 \
-    reduction(+ : face_geometry_errors, cell_geometry_errors, face_rejections,                     \
-                  topology_rejections, small_cell_rejections)
+    reduction(+ : face_decision_errors, degenerate_faces, cell_geometry_errors,                    \
+                  face_rejections, topology_rejections, small_cell_rejections)
 #endif
         for (MFIter mfi(m_sdf, info); mfi.isValid(); ++mfi) {
             Box const vbx = amrex::enclosedCells(mfi.validbox());
@@ -152,9 +153,12 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
                 vfrac(i, j, k) = nfluid == 0 ? 0.0_rt : (nfluid == 8 ? 1.0_rt : -1.0_rt);
             });
 
-            face_geometry_errors += MC::build_face_fractions(
+            GpuArray<int, 2> const face_counts = MC::build_face_fractions(
                 gbx, mc_fab, m_sdf[mfi], m_areafrac[0][mfi], m_areafrac[1][mfi],
-                m_areafrac[2][mfi], m_facecent[0][mfi], m_facecent[1][mfi], m_facecent[2][mfi]);
+                m_areafrac[2][mfi], m_facecent[0][mfi], m_facecent[1][mfi], m_facecent[2][mfi],
+                rejected_faces[0][mfi], rejected_faces[1][mfi], rejected_faces[2][mfi]);
+            face_decision_errors += face_counts[0];
+            degenerate_faces += face_counts[1];
             MC::build_edge_centroids(gbx, mc_fab, m_sdf[mfi], m_edgecent[0][mfi],
                                      m_edgecent[1][mfi], m_edgecent[2][mfi]);
             cell_geometry_errors += MC::build_cell_fractions(
@@ -172,15 +176,19 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
             small_cell_rejections += counts[1];
         }
 
-        ParallelAllReduce::Sum<int>({face_geometry_errors, cell_geometry_errors, face_rejections,
-                                     topology_rejections, small_cell_rejections},
+        ParallelAllReduce::Sum<int>({face_decision_errors, degenerate_faces, cell_geometry_errors,
+                                     face_rejections, topology_rejections, small_cell_rejections},
                                     ParallelContext::CommunicatorSub());
-        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(face_geometry_errors == 0,
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(face_decision_errors == 0,
                                          "Marching-cubes EB encountered " +
-                                             std::to_string(face_geometry_errors) +
-                                             " inconsistent Cartesian-face geometry records");
+                                             std::to_string(face_decision_errors) +
+                                             " Cartesian faces whose two cells resolved the "
+                                             "MC33 ambiguity differently");
+        // Degenerate face polygons were marked for nodal repair alongside the
+        // multi-aperture faces.
+        face_rejections += degenerate_faces;
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
-            cell_geometry_errors == 0 || topology_rejections > 0,
+            cell_geometry_errors == 0 || topology_rejections + face_rejections > 0,
             "Marching-cubes EB could not map an invalid cell-moment record to "
             "the nodal repair set");
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
@@ -275,10 +283,11 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
                                      "Final repaired marching-cubes topology is inconsistent");
 
     // The converged triangulation and the public EB data now describe the same
-    // repaired domain.
+    // repaired domain.  Only the finest level is written; coarse levels that
+    // are rebuilt from the geometry source would otherwise overwrite it.
     std::string stl_output;
     ParmParse("eb2").query("mc_stl_file", stl_output);
-    if (!stl_output.empty()) {
+    if (write_stl_output && !stl_output.empty()) {
         MC::write_stl(stl_output, mc_fabs);
     }
     mc_fabs.clear();

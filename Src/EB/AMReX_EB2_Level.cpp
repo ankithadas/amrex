@@ -7,7 +7,7 @@
 namespace amrex::EB2 {
 
 RepairParameters
-readRepairParameters ()
+GetRepairParameters ()
 {
     RepairParameters p;
 #ifdef AMREX_USE_FLOAT
