@@ -57,8 +57,7 @@ class FabCounters
 {
 public:
     explicit FabCounters (int nfabs)
-        : m_buffer(static_cast<std::size_t>(nfabs) * MC::num_fab_counters),
-          m_totals{}
+        : m_buffer(static_cast<std::size_t>(nfabs) * MC::num_fab_counters)
     {}
 
     //! Zero every block on the host and push to the device.
@@ -94,7 +93,7 @@ public:
 
 private:
     Gpu::Buffer<int> m_buffer;
-    std::array<int, MC::num_fab_counters> m_totals;
+    std::array<int, MC::num_fab_counters> m_totals{};
 };
 
 } // namespace
