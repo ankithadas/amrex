@@ -6,7 +6,7 @@ algorithm_tests = 0
 max_grid_size = 16
 
 custom_stl_test = 1
-eb2.stl_geometry_method = marching_cubes
+eb2.geometry_method = marching_cubes
 eb2.stl_file = stanford_bunny.stl
 eb2.stl_scale = 0.016
 eb2.stl_center = -0.48516235 -0.03025528 -0.94753541
