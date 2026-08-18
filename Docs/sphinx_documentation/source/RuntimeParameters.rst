@@ -804,9 +804,11 @@ Embedded Boundary
    :type: string
    :value: legacy
 
-   Selects the generator used to build cut-cell geometry on the finest EB
-   level for every :py:data:`eb2.geom_type` and for
-   :cpp:`amrex::EB2::Build` calls with a user-provided implicit function.
+   Selects the generator used to build cut-cell geometry from the geometry
+   description (the finest EB level, and any coarse level that is rebuilt
+   rather than coarsened) for every :py:data:`eb2.geom_type` except
+   ``chkpt_file`` and for :cpp:`amrex::EB2::Build` calls with a user-provided
+   implicit function.
    ``legacy`` is the original EB2 construction. ``marching_cubes`` builds
    single-valued cut cells from a marching-cubes (MC33) surface; it is
    available in 3D on Cartesian grids with cubic cells only, and it is not

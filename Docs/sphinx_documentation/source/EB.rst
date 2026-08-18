@@ -251,11 +251,17 @@ builds the sphere with the marching-cubes generator. The generator has the
 following restrictions:
 
 - It is available only in 3D on Cartesian grids with cubic cells
-  (``dx == dy == dz``).
+  (``dx == dy == dz``); a non-cubic grid is rejected even when the geometry
+  is all regular.
 - It produces single-valued cut cells and cannot be combined with
   :cpp:`EB2::BuildMultiValuedMultiCut`.
-- STL input must be watertight and consistently oriented; invalid files are
-  rejected with a diagnostic.
+- STL input must be watertight and consistently oriented. Shared vertices are
+  matched by exact coordinates; invalid files are rejected with a diagnostic
+  that names the offending edge.
+- It applies to the finest level and to any coarse level that is rebuilt
+  from the geometry description (``eb2.build_coarse_level_by_coarsening = 0``
+  or the multi-level :cpp:`EB2::Build` overload); coarse levels obtained by
+  coarsening are unaffected. It is ignored for ``eb2.geom_type = chkpt_file``.
 
 The generator produces at most one fluid volume per cell and one connected
 fluid aperture per Cartesian face. Unsupported topology is an error by
@@ -267,8 +273,13 @@ way. Construction stops when no repair candidates remain or fails after
 ``eb2.maxiter`` passes. When ``eb2.extend_domain_face`` is true, the geometry
 outside the domain is extruded straight outward from the domain faces.
 
-Implicit functions are sampled at the nodes and the exact crossing of every
-cut edge is found by root finding on the function. For STL input, exact
+Implicit functions are sampled at the nodes, without clamping the sample
+positions to the domain (functions that are only defined inside the domain
+must remain finite up to a few cells outside it), and the crossing of every
+Cartesian edge whose end points differ in sign is found by root finding on the
+function; nodes that lie on the surface within roundoff are snapped to exact
+zero, and an edge whose root finding fails falls back to linear interpolation
+of the nodal values. For STL input, exact
 distances are evaluated only in the band needed by cut cells and their
 vertex-normal stencils; away from that band only the inside/outside sign is
 retained. Sign-changing Cartesian edges are intersected with the original STL
@@ -276,9 +287,10 @@ triangles, and the resulting crossings are used for the surface vertices, face
 geometry, edge centroids and cell moments. The public level set and edge
 centroids describe the final repaired domain: fluid nodes are negative,
 covered nodes are positive, and repaired boundary nodes are zero.
-``eb2.mc_stl_file`` optionally writes the converged, repaired triangulation to
-an ASCII STL file. The STL-only key ``eb2.stl_geometry_method`` from earlier
-releases is accepted as a deprecated alias of ``eb2.geometry_method``.
+``eb2.mc_stl_file`` optionally writes the converged, repaired triangulation of
+the finest level to an ASCII STL file. The STL-only key
+``eb2.stl_geometry_method`` from earlier releases is accepted as a deprecated
+alias of ``eb2.geometry_method``.
 
 **Planar EB Surface Output**
 
