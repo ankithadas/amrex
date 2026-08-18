@@ -82,7 +82,10 @@ void validate_scale_invariance ()
     // {scale of the implicit function, EB2 box size used for the build}: the
     // reconstruction must not depend on either.
     struct Variant { Real scale; int eb_max_grid_size; };
-    Variant const variants[] = {{1.e-6_rt, 16}, {1.0_rt, 16}, {1.e6_rt, 16}, {1.0_rt, 8}};
+    Variant const variants[] = {{.scale = 1.e-6_rt, .eb_max_grid_size = 16},
+                                {.scale = 1.0_rt, .eb_max_grid_size = 16},
+                                {.scale = 1.e6_rt, .eb_max_grid_size = 16},
+                                {.scale = 1.0_rt, .eb_max_grid_size = 8}};
     int const saved_max_grid_size = EB2::max_grid_size;
     Real reference_volume = -1.0_rt;
     Long reference_zero_nodes = -1;
@@ -671,7 +674,8 @@ void main_main ()
         } else if (api_build == "host_sphere") {
             static_assert(!EB2::IsGPUable<HostSphereIF>::value,
                           "HostSphereIF must exercise the host-only adapter path");
-            build_with(EB2::makeShop(HostSphereIF{radius, c, fluid_inside}));
+            build_with(EB2::makeShop(HostSphereIF{.m_radius = radius, .m_center = c,
+                                                  .m_fluid_inside = fluid_inside}));
         } else {
             amrex::Abort("api_build must be sphere or host_sphere");
         }
