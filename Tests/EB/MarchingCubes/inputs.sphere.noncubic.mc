@@ -1,8 +1,8 @@
-# Sphere implicit function through the marching-cubes generator.  The radius
-# places the six poles exactly on grid nodes.
+# Non-cubic cells (dz != dx): the marching-cubes generator must abort with a
+# clear message instead of building an inconsistent geometry.
 nx = 64
 ny = 64
-nz = 64
+nz = 32
 
 max_grid_size = 32
 algorithm_tests = 0
@@ -12,4 +12,3 @@ eb2.geom_type = sphere
 eb2.sphere_center = 0.0 0.0 0.0
 eb2.sphere_radius = 0.75
 eb2.sphere_has_fluid_inside = 0
-eb2.mc_stl_file = sphere_mc.stl

@@ -19,3 +19,6 @@ eb2.geom_type = box
 eb2.box_lo = -0.5 -0.5 -0.5
 eb2.box_hi =  0.5  0.5  0.5
 eb2.box_has_fluid_inside = 0
+# The box faces lie on grid nodes, so cells owning a node-coincident EB patch
+# legitimately have unit volume and a nonzero boundary area.
+allow_full_volume_cut_cells = 1

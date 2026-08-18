@@ -3,7 +3,7 @@ ny = 128
 nz = 128
 algorithm_tests = 0
 
-max_grid_size = 16
+max_grid_size = 32
 
 custom_stl_test = 1
 eb2.geometry_method = marching_cubes

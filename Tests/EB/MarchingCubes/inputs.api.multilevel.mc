@@ -15,3 +15,7 @@ eb2.geometry_method = marching_cubes
 eb2.sphere_center = 0.0 0.0 0.0
 eb2.sphere_radius = 0.7
 eb2.sphere_has_fluid_inside = 0
+# The STL output must hold the finest level (same facet count as the
+# single-level build in inputs.api.mc), not the last coarse level built.
+eb2.mc_stl_file = api_multilevel_mc.stl
+expected_mc_stl_facets = 13112
