@@ -6,11 +6,13 @@
 #include <AMReX_Math.H>
 #include <AMReX_Stack.H>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <map>
 #include <sstream>
 #include <tuple>
+#include <utility>
 
 // Reference for BVH: https://rmrsk.github.io/EBGeometry/Concepts.html#bounding-volume-hierarchies
 
@@ -893,8 +895,22 @@ STLtools::build_bvh (Triangle* begin, Triangle* end, Gpu::PinnedVector<Node>& bv
         centmax.max(cent);
     }
     int max_dir = (centmax-centmin).maxDir(false);
-    std::sort(begin, end, [max_dir] (Triangle const& a, Triangle const& b) -> bool
-                              { return a.cent(max_dir) < b.cent(max_dir); });
+    {
+        // Sort by precomputed centroid keys.  Recomputing Triangle::cent()
+        // inside the comparator is not a strict weak ordering under
+        // fast-math (the sum can be re-associated differently at different
+        // call sites), which lets std::sort run out of bounds.
+        Vector<std::pair<Real,int>> keys(ntri);
+        for (int i = 0; i < ntri; ++i) {
+            keys[i] = std::make_pair(begin[i].cent(max_dir), i);
+        }
+        std::sort(keys.begin(), keys.end());
+        Vector<Triangle> sorted(ntri);
+        for (int i = 0; i < ntri; ++i) {
+            sorted[i] = begin[keys[i].second];
+        }
+        std::copy(sorted.begin(), sorted.end(), begin);
+    }
 
     int nsplits = std::min((ntri + (m_bvh_max_size-1)) / m_bvh_max_size, m_bvh_max_splits);
     int tsize = ntri / nsplits;
