@@ -3,6 +3,8 @@
 #include <AMReX_ParmParse.H>
 #include <AMReX_ParallelReduce.H>
 
+#include <algorithm>
+#include <array>
 #include <limits>
 #include <string>
 
@@ -17,6 +19,85 @@
  */
 
 namespace amrex::EB2 {
+
+namespace {
+
+// Device kernels live in free functions: CUDA does not allow extended device
+// lambdas inside protected member functions.
+
+//! Pre-fill the volume fraction of \p bx from the corner signs: 0 covered,
+//! 1 regular, -1 for cut cells that build_cell_fractions overwrites.
+void prefill_volume_fractions (Box const& bx, Array4<Real const> const& sdf,
+                               Array4<Real> const& vfrac)
+{
+    ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+        int nfluid = 0;
+        nfluid += sdf(i, j, k) > 0.0_rt;
+        nfluid += sdf(i + 1, j, k) > 0.0_rt;
+        nfluid += sdf(i, j + 1, k) > 0.0_rt;
+        nfluid += sdf(i + 1, j + 1, k) > 0.0_rt;
+        nfluid += sdf(i, j, k + 1) > 0.0_rt;
+        nfluid += sdf(i + 1, j, k + 1) > 0.0_rt;
+        nfluid += sdf(i, j + 1, k + 1) > 0.0_rt;
+        nfluid += sdf(i + 1, j + 1, k + 1) > 0.0_rt;
+        vfrac(i, j, k) = nfluid == 0 ? 0.0_rt : (nfluid == 8 ? 1.0_rt : -1.0_rt);
+    });
+}
+
+//! Flip the sign of the nodal field: EB2's public convention is negative in fluid.
+void negate_levelset (Box const& bx, Array4<Real> const& phi)
+{
+    ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+        phi(i, j, k) = -phi(i, j, k);
+    });
+}
+
+//! Per-FAB counter blocks (MC::num_fab_counters ints each) for one level.
+class FabCounters
+{
+public:
+    explicit FabCounters (int nfabs)
+        : m_buffer(static_cast<std::size_t>(nfabs) * MC::num_fab_counters),
+          m_totals{}
+    {}
+
+    //! Zero every block on the host and push to the device.
+    void reset ()
+    {
+        std::fill_n(m_buffer.hostData(), m_buffer.size(), 0);
+        m_buffer.copyToDeviceAsync();
+        // The FAB loops that follow may use other streams.
+        Gpu::streamSynchronize();
+    }
+
+    //! Device pointer to the block of the FAB with local index \p local_index.
+    int* block (int local_index) noexcept
+    {
+        return m_buffer.data() + static_cast<std::size_t>(local_index) * MC::num_fab_counters;
+    }
+
+    //! Copy every block to the host and reduce over FABs and MPI ranks.
+    void reduce ()
+    {
+        Gpu::streamSynchronizeAll();
+        m_buffer.copyToHost();
+        m_totals.fill(0);
+        for (std::size_t n = 0; n < m_buffer.size(); ++n) {
+            m_totals[n % MC::num_fab_counters] += m_buffer.hostData()[n];
+        }
+        ParallelAllReduce::Sum(m_totals.data(), MC::num_fab_counters,
+                               ParallelContext::CommunicatorSub());
+    }
+
+    //! Level-wide total of \p counter after reduce().
+    [[nodiscard]] int total (MC::FabCounter counter) const noexcept { return m_totals[counter]; }
+
+private:
+    Gpu::Buffer<int> m_buffer;
+    std::array<int, MC::num_fab_counters> m_totals;
+};
+
+} // namespace
 
 void
 Level::assert_marching_cubes_supported (Geometry const& geom)
@@ -63,9 +144,14 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
     // identically: it is applied to the nodal field and to the crossings.
     Box const domain = geom.Domain();
     GpuArray<int, 3> const is_periodic{geom.isPeriodic(0), geom.isPeriodic(1), geom.isPeriodic(2)};
+    // Every MC entry point accumulates its counts into the FAB's device
+    // counter block; the blocks are copied to the host once per pass.
+    FabCounters counters(m_sdf.local_size());
+    counters.reset();
     if (extend_domain_face) {
         for (MFIter mfi(m_sdf, MFItInfo().DisableDeviceSync()); mfi.isValid(); ++mfi) {
-            MC::extend_domain_face_levelset(mfi.validbox(), domain, is_periodic, m_sdf[mfi]);
+            MC::extend_domain_face_levelset(mfi.validbox(), domain, is_periodic, m_sdf[mfi],
+                                            counters.block(mfi.LocalIndex()));
             MC::extend_domain_face_edge_intersections(domain, is_periodic, mc_fabs[mfi]);
         }
         m_sdf.OverrideSync(geom.periodicity());
@@ -107,13 +193,14 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
             rejected_faces[idim].setVal(0);
         }
 
+        counters.reset();
         MFItInfo info{};
 #if defined(AMREX_USE_OMP) && !defined(AMREX_USE_GPU)
         info.SetDynamic(true);
 #pragma omp parallel
 #endif
         for (MFIter mfi(m_sdf, info); mfi.isValid(); ++mfi) {
-            MC::marching_cubes(geom, m_sdf[mfi], mc_fabs[mfi]);
+            MC::marching_cubes(geom, m_sdf[mfi], mc_fabs[mfi], counters.block(mfi.LocalIndex()));
         }
 
         m_volfrac.setVal(1.0_rt, 0, 1, m_volfrac.nGrowVect());
@@ -122,63 +209,49 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
         m_bndrycent.setVal(-1.0_rt, 0, AMREX_SPACEDIM, m_bndrycent.nGrowVect());
         m_bndrynorm.setVal(0.0_rt, 0, AMREX_SPACEDIM, m_bndrynorm.nGrowVect());
 
-        int face_decision_errors = 0;
-        int degenerate_faces = 0;
-        int cell_geometry_errors = 0;
-        int face_rejections = 0;
-        int topology_rejections = 0;
-        int small_cell_rejections = 0;
 #ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())                                                 \
-    reduction(+ : face_decision_errors, degenerate_faces, cell_geometry_errors,                    \
-                  face_rejections, topology_rejections, small_cell_rejections)
+#pragma omp parallel if (Gpu::notInLaunchRegion())
 #endif
         for (MFIter mfi(m_sdf, info); mfi.isValid(); ++mfi) {
             Box const vbx = amrex::enclosedCells(mfi.validbox());
             Box const gbx = amrex::grow(vbx, 1);
-            auto const sdf = m_sdf.const_array(mfi);
-            auto const vfrac = m_volfrac.array(mfi);
             auto& mc_fab = mc_fabs[mfi];
+            int* const fab_counters = counters.block(mfi.LocalIndex());
 
-            ParallelFor(gbx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
-                int nfluid = 0;
-                nfluid += sdf(i, j, k) > 0.0_rt;
-                nfluid += sdf(i + 1, j, k) > 0.0_rt;
-                nfluid += sdf(i, j + 1, k) > 0.0_rt;
-                nfluid += sdf(i + 1, j + 1, k) > 0.0_rt;
-                nfluid += sdf(i, j, k + 1) > 0.0_rt;
-                nfluid += sdf(i + 1, j, k + 1) > 0.0_rt;
-                nfluid += sdf(i, j + 1, k + 1) > 0.0_rt;
-                nfluid += sdf(i + 1, j + 1, k + 1) > 0.0_rt;
-                vfrac(i, j, k) = nfluid == 0 ? 0.0_rt : (nfluid == 8 ? 1.0_rt : -1.0_rt);
-            });
+            prefill_volume_fractions(gbx, m_sdf.const_array(mfi), m_volfrac.array(mfi));
 
-            GpuArray<int, 2> const face_counts = MC::build_face_fractions(
+            MC::build_face_fractions(
                 gbx, mc_fab, m_sdf[mfi], m_areafrac[0][mfi], m_areafrac[1][mfi],
                 m_areafrac[2][mfi], m_facecent[0][mfi], m_facecent[1][mfi], m_facecent[2][mfi],
-                rejected_faces[0][mfi], rejected_faces[1][mfi], rejected_faces[2][mfi]);
-            face_decision_errors += face_counts[0];
-            degenerate_faces += face_counts[1];
+                rejected_faces[0][mfi], rejected_faces[1][mfi], rejected_faces[2][mfi],
+                fab_counters);
             MC::build_edge_centroids(gbx, mc_fab, m_sdf[mfi], m_edgecent[0][mfi],
                                      m_edgecent[1][mfi], m_edgecent[2][mfi]);
-            cell_geometry_errors += MC::build_cell_fractions(
+            MC::build_cell_fractions(
                 vbx, geom, mc_fab, m_sdf[mfi], m_areafrac[0][mfi],
                 m_areafrac[1][mfi], m_areafrac[2][mfi], m_volfrac[mfi], m_centroid[mfi],
-                m_bndryarea[mfi], m_bndrycent[mfi], m_bndrynorm[mfi]);
+                m_bndryarea[mfi], m_bndrycent[mfi], m_bndrynorm[mfi], fab_counters);
 
-            face_rejections += MC::mark_faces_for_cleanup(
+            MC::mark_faces_for_cleanup(
                 vbx, mc_fab, m_sdf[mfi], rejected_faces[0][mfi],
-                rejected_faces[1][mfi], rejected_faces[2][mfi]);
-            GpuArray<int, 2> const counts =
-                MC::mark_cells_for_cleanup(vbx, mc_fab, m_sdf[mfi],
-                                           m_volfrac[mfi], small_volfrac, rejected_cells[mfi]);
-            topology_rejections += counts[0];
-            small_cell_rejections += counts[1];
+                rejected_faces[1][mfi], rejected_faces[2][mfi], fab_counters);
+            MC::mark_cells_for_cleanup(vbx, mc_fab, m_sdf[mfi], m_volfrac[mfi], small_volfrac,
+                                       rejected_cells[mfi], fab_counters);
         }
 
-        ParallelAllReduce::Sum<int>({face_decision_errors, degenerate_faces, cell_geometry_errors,
-                                     face_rejections, topology_rejections, small_cell_rejections},
-                                    ParallelContext::CommunicatorSub());
+        // One device-to-host copy and one reduction per pass.
+        counters.reduce();
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(counters.total(MC::counter_invalid_triangles) == 0,
+                                         "Marching Cubes: invalid triangle");
+        int const face_decision_errors = counters.total(MC::counter_face_decision_errors);
+        int const degenerate_faces = counters.total(MC::counter_degenerate_faces);
+        int const cell_geometry_errors = counters.total(MC::counter_closure_errors)
+            + counters.total(MC::counter_volume_errors)
+            + counters.total(MC::counter_centroid_errors)
+            + counters.total(MC::counter_area_vector_errors);
+        int face_rejections = counters.total(MC::counter_face_rejections);
+        int const topology_rejections = counters.total(MC::counter_topology_rejections);
+        int const small_cell_rejections = counters.total(MC::counter_small_cell_rejections);
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(face_decision_errors == 0,
                                          "Marching-cubes EB encountered " +
                                              std::to_string(face_decision_errors) +
@@ -210,20 +283,22 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
             rejected_faces[idim].FillBoundary(geom.periodicity());
         }
 
-        Long changed_nodes = 0;
+        counters.reset();
 #ifdef AMREX_USE_OMP
-#pragma omp parallel if (Gpu::notInLaunchRegion()) reduction(+ : changed_nodes)
+#pragma omp parallel if (Gpu::notInLaunchRegion())
 #endif
         for (MFIter mfi(m_sdf, info); mfi.isValid(); ++mfi) {
-            changed_nodes += MC::zero_nodes_for_cleanup(
+            int* const fab_counters = counters.block(mfi.LocalIndex());
+            MC::zero_nodes_for_cleanup(
                 mfi.validbox(), rejected_cells[mfi], rejected_faces[0][mfi], rejected_faces[1][mfi],
-                rejected_faces[2][mfi], m_sdf[mfi]);
+                rejected_faces[2][mfi], m_sdf[mfi], fab_counters);
             if (extend_domain_face) {
-                changed_nodes += MC::extend_domain_face_levelset(
-                    mfi.validbox(), domain, is_periodic, m_sdf[mfi]);
+                MC::extend_domain_face_levelset(mfi.validbox(), domain, is_periodic, m_sdf[mfi],
+                                                fab_counters);
             }
         }
-        ParallelAllReduce::Sum(changed_nodes, ParallelContext::CommunicatorSub());
+        counters.reduce();
+        int const changed_nodes = counters.total(MC::counter_changed_nodes);
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(changed_nodes > 0,
                                          "Marching-cubes EB repair found rejected "
                                          "geometry but changed no fluid nodes");
@@ -243,7 +318,12 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
             if (cell_geometry_errors > 0) {
                 amrex::Print() << "AMReX MC EB: Iter. " << iter + 1 << " included "
                                << cell_geometry_errors
-                               << " invalid cell-moment records in the repair set\n";
+                               << " invalid cell-moment records in the repair set (closure="
+                               << counters.total(MC::counter_closure_errors)
+                               << ", volume=" << counters.total(MC::counter_volume_errors)
+                               << ", centroid=" << counters.total(MC::counter_centroid_errors)
+                               << ", area-vector="
+                               << counters.total(MC::counter_area_vector_errors) << ")\n";
             }
         }
     }
@@ -296,11 +376,7 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
 #pragma omp parallel if (Gpu::notInLaunchRegion())
 #endif
     for (MFIter mfi(m_sdf, final_info); mfi.isValid(); ++mfi) {
-        auto const phi = m_sdf.array(mfi);
-        ParallelFor(m_sdf[mfi].box(), [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
-            // EB2's public convention is negative in fluid.
-            phi(i, j, k) = -phi(i, j, k);
-        });
+        negate_levelset(m_sdf[mfi].box(), m_sdf.array(mfi));
     }
     m_levelset = std::move(m_sdf);
 

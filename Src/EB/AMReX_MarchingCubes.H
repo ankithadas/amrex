@@ -68,6 +68,31 @@ enum CellDataComponent : int {
     num_cell_data_components
 };
 
+/**
+ * \brief Slots of the per-FAB counter block that the entry points below
+ *        accumulate into.
+ *
+ * The caller allocates num_fab_counters ints per FAB in device-accessible
+ * memory (Gpu::Buffer or Gpu::DeviceVector), zeroes them once per repair
+ * pass, passes each FAB's block to the entry points, and copies all blocks to
+ * the host once per pass.  The entry points themselves never synchronize with
+ * the host to report their counts.
+ */
+enum FabCounter : int {
+    counter_invalid_triangles = 0,   //!< marching_cubes: triangle without a crossing vertex
+    counter_face_decision_errors,    //!< build_face_fractions
+    counter_degenerate_faces,        //!< build_face_fractions
+    counter_closure_errors,          //!< build_cell_fractions
+    counter_volume_errors,           //!< build_cell_fractions
+    counter_centroid_errors,         //!< build_cell_fractions
+    counter_area_vector_errors,      //!< build_cell_fractions
+    counter_face_rejections,         //!< mark_faces_for_cleanup
+    counter_topology_rejections,     //!< mark_cells_for_cleanup
+    counter_small_cell_rejections,   //!< mark_cells_for_cleanup
+    counter_changed_nodes,           //!< zero_nodes_for_cleanup, extend_domain_face_levelset
+    num_fab_counters
+};
+
 //! Initialize internal lookup tables and device buffers for marching cubes.
 void Initialize ();
 //! Destroy any static storage allocated by Initialize().
@@ -111,8 +136,14 @@ struct MCFab
     void defineEdgeIntersections (Box const& sdf_box);
 };
 
-//! Run marching cubes on signed-distance field \p sdf_fab.
-void marching_cubes (Geometry const& geom, FArrayBox& sdf_fab, MCFab& mc_fab);
+/**
+ * \brief Run marching cubes on signed-distance field \p sdf_fab.
+ *
+ * \p counters is the FAB's counter block (see FabCounter); a nonzero
+ * counter_invalid_triangles afterwards indicates a lookup-table invariant
+ * violation and the caller must abort.
+ */
+void marching_cubes (Geometry const& geom, FArrayBox& sdf_fab, MCFab& mc_fab, int* counters);
 
 /**
  * \brief Build Cartesian-face aperture fractions and centroids from the MC
@@ -124,15 +155,17 @@ void marching_cubes (Geometry const& geom, FArrayBox& sdf_fab, MCFab& mc_fab);
  * marked with 1 in \p rejected_x / \p rejected_y / \p rejected_z where those
  * arrays contain the face, so the nodal repair pass covers them.
  *
- * \return {number of faces whose two cells resolved the MC33 ambiguity
- *          differently (an invariant violation), number of degenerate faces
- *          marked for repair}.
+ * Adds the number of faces whose two cells resolved the MC33 ambiguity
+ * differently (an invariant violation) to counter_face_decision_errors and
+ * the number of degenerate faces marked for repair to counter_degenerate_faces
+ * of \p counters.
  */
-GpuArray<int,2> build_face_fractions (
+void build_face_fractions (
     Box const& bx, MCFab const& mc_fab, FArrayBox const& sdf,
     FArrayBox& apx, FArrayBox& apy, FArrayBox& apz,
     FArrayBox& fcx, FArrayBox& fcy, FArrayBox& fcz,
-    IArrayBox& rejected_x, IArrayBox& rejected_y, IArrayBox& rejected_z);
+    IArrayBox& rejected_x, IArrayBox& rejected_y, IArrayBox& rejected_z,
+    int* counters);
 
 /**
  * \brief Build EB edge-centroid data from the MC signed-distance field.
@@ -152,15 +185,16 @@ void build_edge_centroids (
  * field and the cell-owned embedded-boundary triangles form the closed
  * boundary used to compute volume and first moments.
  *
- * \return Number of single-valued cells whose triangulation produced invalid
- *         geometry.
+ * Single-valued cells whose triangulation produced invalid geometry are
+ * counted in counter_closure_errors, counter_volume_errors,
+ * counter_centroid_errors and counter_area_vector_errors of \p counters.
  */
-int build_cell_fractions (
+void build_cell_fractions (
     Box const& bx, Geometry const& geom, MCFab const& mc_fab,
     FArrayBox const& sdf,
     FArrayBox& apx, FArrayBox& apy, FArrayBox& apz,
     FArrayBox& vfrac, FArrayBox& vcent, FArrayBox& barea,
-    FArrayBox& bcent, FArrayBox& bnorm);
+    FArrayBox& bcent, FArrayBox& bnorm, int* counters);
 
 /**
  * \brief Classify cells and build all EBCellFlag connectivity from MC SDF and
@@ -181,14 +215,14 @@ int build_cell_topology (
  * \brief Mark Cartesian faces with more than one resolved fluid aperture.
  *
  * Marks are OR-ed into the arrays, so faces already rejected by
- * build_face_fractions are kept.
- *
- * \return Number of newly rejected faces across all three coordinate directions.
+ * build_face_fractions are kept.  The number of newly rejected faces across
+ * all three coordinate directions is added to counter_face_rejections of
+ * \p counters.
  */
-int mark_faces_for_cleanup (
+void mark_faces_for_cleanup (
     Box const& bx, MCFab const& mc_fab, FArrayBox const& sdf,
     IArrayBox& rejected_x, IArrayBox& rejected_y,
-    IArrayBox& rejected_z);
+    IArrayBox& rejected_z, int* counters);
 
 /**
  * \brief Mark cells that the single-VoF MC builder must remove.
@@ -197,26 +231,28 @@ int mark_faces_for_cleanup (
  * topology has more than one fluid component, or its volume fraction is below
  * \p small_volfrac. Face-aperture rejection is handled separately.
  *
- * \return Counts of topology and small-cell rejections, respectively.
- *         \p rejected records the reason of each rejected cell as one of the
- *         RejectionReason values (topology takes precedence) and 0 otherwise.
+ * Topology and small-cell rejections are added to counter_topology_rejections
+ * and counter_small_cell_rejections of \p counters.  \p rejected records the
+ * reason of each rejected cell as one of the RejectionReason values (topology
+ * takes precedence) and 0 otherwise.
  */
-GpuArray<int,2> mark_cells_for_cleanup (
+void mark_cells_for_cleanup (
     Box const& bx, MCFab const& mc_fab, FArrayBox const& sdf,
-    FArrayBox const& vfrac, Real small_volfrac, IArrayBox& rejected);
+    FArrayBox const& vfrac, Real small_volfrac, IArrayBox& rejected,
+    int* counters);
 
 /**
  * \brief Apply the legacy EB repair transform to the MC working level set.
  *
  * Positive (fluid) nodes incident to a rejected face or cell are moved to
  * exact zero. The operation is monotone and leaves all other samples intact.
- *
- * \return Number of nodes changed from positive to zero.
+ * The number of nodes changed from positive to zero is added to
+ * counter_changed_nodes of \p counters.
  */
-Long zero_nodes_for_cleanup (
+void zero_nodes_for_cleanup (
     Box const& node_box, IArrayBox const& rejected_cells,
     IArrayBox const& rejected_x, IArrayBox const& rejected_y,
-    IArrayBox const& rejected_z, FArrayBox& sdf);
+    IArrayBox const& rejected_z, FArrayBox& sdf, int* counters);
 
 /**
  * \brief Extrude the nodal level set straight outward from physical domain faces.
@@ -224,13 +260,12 @@ Long zero_nodes_for_cleanup (
  * An exterior node is assigned the value of the corresponding physical-face
  * node only when it is outside in exactly one non-periodic direction. This
  * preserves the feature's transverse footprint and does not extend diagonally
- * from domain edges or corners.
- *
- * \return Number of exterior nodal values changed.
+ * from domain edges or corners.  The number of exterior nodal values changed
+ * is added to counter_changed_nodes of \p counters.
  */
-Long extend_domain_face_levelset (
+void extend_domain_face_levelset (
     Box const& node_box, Box const& domain, GpuArray<int,3> const& is_periodic,
-    FArrayBox& sdf);
+    FArrayBox& sdf, int* counters);
 
 /**
  * \brief Extrude exact transverse-edge crossings with the domain-face level set.

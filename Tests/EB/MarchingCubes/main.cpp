@@ -129,6 +129,22 @@ void validate_scale_invariance ()
     EB2::max_grid_size = saved_max_grid_size;
 }
 
+//! A zeroed marching-cubes counter block for one FAB.
+Gpu::Buffer<int> make_fab_counters ()
+{
+    Gpu::Buffer<int> counters(MC::num_fab_counters);
+    std::fill_n(counters.hostData(), counters.size(), 0);
+    counters.copyToDeviceAsync();
+    return counters;
+}
+
+//! Level-wide sum of one counter after copying the block to the host.
+int fab_counter (Gpu::Buffer<int>& counters, MC::FabCounter which)
+{
+    counters.copyToHost();
+    return counters.hostData()[which];
+}
+
 bool resolved_bottom_face_is_fluid_connected (GpuArray<Real, 8> const& values)
 {
     Box const cell_box(IntVect(0), IntVect(0));
@@ -145,7 +161,9 @@ bool resolved_bottom_face_is_fluid_connected (GpuArray<Real, 8> const& values)
     Geometry geom(cell_box, RealBox({0.0_rt, 0.0_rt, 0.0_rt},
                                     {1.0_rt, 1.0_rt, 1.0_rt}), 0, {0, 0, 0});
     MC::MCFab result;
-    MC::marching_cubes(geom, sdf, result);
+    auto counters = make_fab_counters();
+    MC::marching_cubes(geom, sdf, result, counters.data());
+    AMREX_ALWAYS_ASSERT(fab_counter(counters, MC::counter_invalid_triangles) == 0);
 
     GpuArray<int, MC::num_cell_data_components> host{};
     Gpu::dtoh_memcpy(host.data(), result.m_cell_data.dataPtr(), sizeof(host));
@@ -185,7 +203,9 @@ void validate_mc33_vertex_indices ()
         });
 
         MC::MCFab result;
-        MC::marching_cubes(geom, sdf, result);
+        auto counters = make_fab_counters();
+        MC::marching_cubes(geom, sdf, result, counters.data());
+        AMREX_ALWAYS_ASSERT(fab_counter(counters, MC::counter_invalid_triangles) == 0);
 
         GpuArray<int, MC::num_cell_data_components> cell_data{};
         Gpu::dtoh_memcpy(cell_data.data(), result.m_cell_data.dataPtr(), sizeof(cell_data));
@@ -289,9 +309,11 @@ void validate_exact_ambiguous_face_fraction ()
     rejected_x.setVal<RunOn::Device>(0);
     rejected_y.setVal<RunOn::Device>(0);
     rejected_z.setVal<RunOn::Device>(0);
-    GpuArray<int, 2> const face_counts = MC::build_face_fractions(
-        cell_box, mc_fab, sdf, apx, apy, apz, fcx, fcy, fcz, rejected_x, rejected_y, rejected_z);
-    int const errors = face_counts[0] + face_counts[1];
+    auto counters = make_fab_counters();
+    MC::build_face_fractions(cell_box, mc_fab, sdf, apx, apy, apz, fcx, fcy, fcz, rejected_x,
+                             rejected_y, rejected_z, counters.data());
+    int const errors = fab_counter(counters, MC::counter_face_decision_errors)
+                       + fab_counter(counters, MC::counter_degenerate_faces);
 
     Gpu::Buffer<Real> area_buffer(1);
     Box const sample_box = amrex::makeSingleCellBox(IntVect(0), apz.box().ixType());
