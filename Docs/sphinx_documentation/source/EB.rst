@@ -257,16 +257,49 @@ following restrictions:
 - STL input must be watertight and consistently oriented; invalid files are
   rejected with a diagnostic.
 
-The parameters ``eb2.small_volfrac``, ``eb2.cover_multiple_cuts`` and
-``eb2.maxiter`` control its repair loop exactly as they do for the default
-generator: small cells and cells whose topology cannot be represented by a
-single-valued cut cell are removed by moving level-set nodes onto the
-boundary and rebuilding the geometry until it is clean. When
-``eb2.extend_domain_face`` is true, the geometry outside the domain is
-extruded straight outward from the domain faces. Setting ``eb2.mc_stl_file``
-writes the final triangulation to an ASCII STL file for visualization. The
-STL-only key ``eb2.stl_geometry_method`` from earlier releases is accepted as
-a deprecated alias of ``eb2.geometry_method``.
+The generator produces at most one fluid volume per cell and one connected
+fluid aperture per Cartesian face. Unsupported topology is an error by
+default. Setting ``eb2.cover_multiple_cuts = 1`` enables the same monotone
+nodal repair used by the default generator: fluid nodes incident to an
+unsupported face or cell are moved to exact zero and the geometry is rebuilt.
+Cells with volume fraction below ``eb2.small_volfrac`` are repaired in the same
+way. Construction stops when no repair candidates remain or fails after
+``eb2.maxiter`` passes. When ``eb2.extend_domain_face`` is true, the geometry
+outside the domain is extruded straight outward from the domain faces.
+
+Implicit functions are sampled at the nodes and the exact crossing of every
+cut edge is found by root finding on the function. For STL input, exact
+distances are evaluated only in the band needed by cut cells and their
+vertex-normal stencils; away from that band only the inside/outside sign is
+retained. Sign-changing Cartesian edges are intersected with the original STL
+triangles, and the resulting crossings are used for the surface vertices, face
+geometry, edge centroids and cell moments. The public level set and edge
+centroids describe the final repaired domain: fluid nodes are negative,
+covered nodes are positive, and repaired boundary nodes are zero.
+``eb2.mc_stl_file`` optionally writes the converged, repaired triangulation to
+an ASCII STL file. The STL-only key ``eb2.stl_geometry_method`` from earlier
+releases is accepted as a deprecated alias of ``eb2.geometry_method``.
+
+**Planar EB Surface Output**
+
+The single-valued planar boundary reconstructed from an
+:cpp:`EBFArrayBoxFactory` can be written to an ASCII STL file for diagnostic
+visualization:
+
+.. highlight:: c++
+
+::
+
+   #include <AMReX_WriteEBSurface.H>
+
+   amrex::WriteEBSurfaceSTL(ba, dm, geom, factory.get(), "eb_surface.stl");
+
+Each cut cell contributes its independently reconstructed planar polygon,
+which is triangulated in the output. Neighboring planes are not welded along
+shared cell faces, so this diagnostic STL is generally not watertight.
+Applying this writer to factories produced by different EB generators gives a
+representation-controlled comparison of their projected cut-cell data; it is
+not a closed surface-mesh exporter.
 
 **Managing IndexSpace Objects**
 
