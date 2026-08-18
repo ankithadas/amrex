@@ -7,15 +7,40 @@
 #include <AMReX_Geometry.H>
 #include <AMReX_GpuContainers.H>
 #include <AMReX_iMultiFab.H>
+#include <AMReX_LayoutData.H>
 
-#include <map>
-#include <memory>
 #include <string>
 
 /**
  * \file AMReX_MarchingCubes.H
  *
  * GPU-enabled marching-cubes routines used to extract EB surfaces.
+ *
+ * Geometry-source contract
+ * ------------------------
+ * The marching-cubes EB builder is independent of how the geometry is
+ * described (STL triangulation, analytic implicit function, parser
+ * expression, ...).  A geometry source feeds it through exactly two inputs:
+ *
+ * 1. A nodal scalar field (the "MC level set").  It uses the marching-cubes
+ *    sign convention: values greater than zero are fluid, values less than
+ *    zero are covered, and an exact zero marks a node lying on the boundary
+ *    (it takes the covered sign for the two-state MC33 lookup, and edge
+ *    crossings are placed exactly at that node).  Only the sign and local
+ *    continuity are required; magnitudes are used for the linear crossing
+ *    fallback and the MC33 asymptotic decider.  Note that this is the
+ *    opposite of the EB2 implicit-function convention (negative in fluid),
+ *    which is why the builder negates the field on ingest and again when it
+ *    exports the public level set.
+ *
+ * 2. Optional exact crossings on Cartesian edges, stored in
+ *    MCFab::m_edge_intersections as the normalized position in [0,1] measured
+ *    from the low node.  Edges without an exact crossing keep
+ *    invalid_edge_intersection and fall back to linear interpolation of the
+ *    nodal field.
+ *
+ * See AMReX_EB2_Level_MC.H for the adapters that produce these inputs from
+ * EB2::GeometryShop implicit functions and from STLtools.
  */
 
 namespace amrex::MC {
@@ -206,11 +231,8 @@ Long extend_domain_face_levelset (
 void extend_domain_face_edge_intersections (
     Box const& domain, GpuArray<int,3> const& is_periodic, MCFab& mc_fab);
 
-//! Write the converged MC triangles owned by \p grids to an STL file.
-void write_stl (
-    std::string const& filename,
-    std::map<int,std::unique_ptr<MCFab>> const& mc_fabs,
-    BoxArray const& grids);
+//! Write the converged MC triangles owned by the valid boxes of \p mc_fabs to an STL file.
+void write_stl (std::string const& filename, LayoutData<MCFab> const& mc_fabs);
 
 }
 

@@ -55,6 +55,30 @@ bool ExtendDomainFace ()
     return extend_domain_face;
 }
 
+GeometryMethod geometryMethod ()
+{
+    // Queried at build time rather than in Initialize so that parameters set
+    // programmatically after amrex::Initialize are honored.
+    ParmParse pp("eb2");
+    std::string method_name("legacy");
+    if (pp.query("stl_geometry_method", method_name)) {
+        static bool warned = false;
+        if (!warned && amrex::Verbose() > 0) {
+            amrex::Warning("eb2.stl_geometry_method is deprecated; use eb2.geometry_method, "
+                           "which applies to every eb2.geom_type");
+        }
+        warned = true;
+    }
+    pp.query("geometry_method", method_name);
+    if (method_name == "legacy") {
+        return GeometryMethod::legacy;
+    } else if (method_name == "marching_cubes") {
+        return GeometryMethod::marching_cubes;
+    }
+    amrex::Abort("eb2.geometry_method must be legacy or marching_cubes, not " + method_name);
+    return GeometryMethod::legacy;
+}
+
 int NumCoarsenOpt ()
 {
     return num_coarsen_opt;

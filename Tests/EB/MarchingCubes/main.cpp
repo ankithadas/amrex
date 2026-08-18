@@ -1,6 +1,7 @@
 
 #include <AMReX.H>
 #include <AMReX_EB2.H>
+#include <AMReX_EB2_IF_Sphere.H>
 #include <AMReX_EBFabFactory.H>
 #include <AMReX_EB_STL_utils.H>
 #include <AMReX_MarchingCubes.H>
@@ -8,6 +9,7 @@
 #include <AMReX_WriteEBSurface.H>
 
 #include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <limits>
 #include <utility>
@@ -15,6 +17,29 @@
 using namespace amrex;
 
 namespace {
+
+/**
+ * Host-only sphere implicit function.  It is deliberately not GPU-callable so
+ * that the generic marching-cubes adapters exercise their RunOn::Cpu path
+ * (pinned staging of fillFab/getIntercept), the same way a user-defined
+ * host functor would.
+ */
+struct HostSphereIF
+{
+    Real m_radius;
+    RealArray m_center;
+    bool m_fluid_inside;
+
+    Real operator() (RealArray const& p) const noexcept
+    {
+        Real d2 = 0.0_rt;
+        for (int d = 0; d < AMREX_SPACEDIM; ++d) {
+            d2 += (p[d]-m_center[d])*(p[d]-m_center[d]);
+        }
+        Real const v = std::sqrt(d2) - m_radius;
+        return m_fluid_inside ? v : -v;
+    }
+};
 
 bool resolved_bottom_face_is_fluid_connected (GpuArray<Real, 8> const& values)
 {
@@ -340,9 +365,14 @@ void main_main ()
     bool custom_stl_test = false;
     bool narrow_band_test = false;
     std::string eb_method("marching_cubes");
+    std::string geom_type("stl");
+    std::string api_build;
+    bool api_all_levels = false;
     std::string stl_file("cube.stl");
     Real stl_scale = 1.0;
     std::vector<Real> stl_center{0.0, 0.0, 0.0};
+    Real body_volume = -1.0_rt; // analytic solid volume, < 0 when unknown
+    bool fluid_inside = false;
     {
         pp.query("nx", nx);
         pp.query("ny", ny);
@@ -359,6 +389,14 @@ void main_main ()
         pp.query("build_coarse_level_by_coarsening", build_coarse_level_by_coarsening);
         pp.query("custom_stl_test", custom_stl_test);
         pp.query("narrow_band_test", narrow_band_test);
+        // Build through the C++ API with an explicit GeometryShop instead of
+        // the ParmParse-driven EB2::Build: "sphere" (GPU-callable SphereIF) or
+        // "host_sphere" (host-only functor).
+        pp.query("api_build", api_build);
+        // With api_build, also build every coarse level directly from the
+        // GeometryShop (EB2::Build overload taking a Vector<Geometry>) instead
+        // of coarsening the fine level.
+        pp.query("api_all_levels", api_all_levels);
         std::vector<Real> prob_lo{xmin, ymin, zmin};
         std::vector<Real> prob_hi{xmax, ymax, zmax};
         ParmParse ppgeom("geometry");
@@ -374,15 +412,54 @@ void main_main ()
         }
 
         ParmParse ppeb2("eb2");
-        std::string geom_type("stl");
         ppeb2.queryAdd("geom_type", geom_type);
-        ppeb2.queryAdd("stl_file", stl_file);
-        ppeb2.queryAdd("stl_scale", stl_scale);
-        ppeb2.queryAdd("stl_center", stl_center);
-        ppeb2.queryAdd("stl_geometry_method", eb_method);
+        // Older inputs use the deprecated STL-only key; the generic key wins.
+        ppeb2.query("stl_geometry_method", eb_method);
+        ppeb2.queryAdd("geometry_method", eb_method);
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
             eb_method == "legacy" || eb_method == "marching_cubes",
-            "eb2.stl_geometry_method must be legacy or marching_cubes");
+            "eb2.geometry_method must be legacy or marching_cubes");
+
+        // Analytic solid volume for the geometry types the test knows.
+        if (!api_build.empty() || geom_type == "sphere") {
+            Real radius = 0.5_rt;
+            ppeb2.queryAdd("sphere_radius", radius);
+            std::vector<Real> center{0.0_rt, 0.0_rt, 0.0_rt};
+            ppeb2.queryAdd("sphere_center", center);
+            int has_fluid_inside = 0;
+            ppeb2.queryAdd("sphere_has_fluid_inside", has_fluid_inside);
+            fluid_inside = has_fluid_inside != 0;
+            body_volume = 4.0_rt/3.0_rt*std::acos(-1.0_rt)*radius*radius*radius;
+        } else if (geom_type == "stl") {
+            ppeb2.queryAdd("stl_file", stl_file);
+            ppeb2.queryAdd("stl_scale", stl_scale);
+            ppeb2.queryAdd("stl_center", stl_center);
+            // cube.stl is the [-1,1]^3 cube; other STL files use custom_stl_test.
+            body_volume = 8.0_rt*stl_scale*stl_scale*stl_scale;
+        } else if (geom_type == "box") {
+            std::vector<Real> lo, hi;
+            ppeb2.getarr("box_lo", lo);
+            ppeb2.getarr("box_hi", hi);
+            int has_fluid_inside = 0;
+            ppeb2.queryAdd("box_has_fluid_inside", has_fluid_inside);
+            fluid_inside = has_fluid_inside != 0;
+            body_volume = (hi[0]-lo[0])*(hi[1]-lo[1])*(hi[2]-lo[2]);
+        } else if (geom_type == "cylinder") {
+            Real radius = 0.5_rt;
+            Real height = -1.0_rt;
+            ppeb2.get("cylinder_radius", radius);
+            ppeb2.queryAdd("cylinder_height", height);
+            int has_fluid_inside = 0;
+            ppeb2.queryAdd("cylinder_has_fluid_inside", has_fluid_inside);
+            fluid_inside = has_fluid_inside != 0;
+            if (height > 0.0_rt) {
+                body_volume = std::acos(-1.0_rt)*radius*radius*height;
+            }
+        }
+        if (body_volume < 0.0_rt) {
+            // parser, torus, plane, ...: only range and consistency checks.
+            custom_stl_test = true;
+        }
     }
 
     if (narrow_band_test) {
@@ -397,8 +474,41 @@ void main_main ()
     DistributionMapping dm(ba);
 
     double t0 = amrex::second();
-    EB2::Build(geom, required_coarsening_level, max_coarsening_level, 4,
-               build_coarse_level_by_coarsening);
+    if (api_build.empty()) {
+        EB2::Build(geom, required_coarsening_level, max_coarsening_level, 4,
+                   build_coarse_level_by_coarsening);
+    } else {
+        Real radius = 0.5_rt;
+        std::vector<Real> center{0.0_rt, 0.0_rt, 0.0_rt};
+        ParmParse ppeb2("eb2");
+        ppeb2.queryAdd("sphere_radius", radius);
+        ppeb2.queryAdd("sphere_center", center);
+        RealArray const c{AMREX_D_DECL(center[0], center[1], center[2])};
+        Vector<Geometry> all_geoms;
+        if (api_all_levels) {
+            all_geoms.push_back(geom);
+            for (int ilev = 1; ilev <= max_coarsening_level; ++ilev) {
+                all_geoms.push_back(amrex::coarsen(all_geoms.back(), 2));
+            }
+        }
+        auto build_with = [&] (auto const& gshop) {
+            if (api_all_levels) {
+                EB2::Build(gshop, all_geoms, 4);
+            } else {
+                EB2::Build(gshop, geom, required_coarsening_level, max_coarsening_level, 4,
+                           build_coarse_level_by_coarsening);
+            }
+        };
+        if (api_build == "sphere") {
+            build_with(EB2::makeShop(EB2::SphereIF(radius, c, fluid_inside)));
+        } else if (api_build == "host_sphere") {
+            static_assert(!EB2::IsGPUable<HostSphereIF>::value,
+                          "HostSphereIF must exercise the host-only adapter path");
+            build_with(EB2::makeShop(HostSphereIF{radius, c, fluid_inside}));
+        } else {
+            amrex::Abort("api_build must be sphere or host_sphere");
+        }
+    }
     double t1 = amrex::second();
     amrex::Print() << "EB method: " << eb_method << ", build time: " << t1 - t0 << "\n";
     auto factory = makeEBFabFactory(geom, ba, dm, {1, 1, 1}, EBSupport::full);
@@ -412,7 +522,7 @@ void main_main ()
     Real const fluid_volume =
         volfrac.sum() * geom.CellSize(0) * geom.CellSize(1) * geom.CellSize(2);
     Real const domain_volume = (xmax - xmin) * (ymax - ymin) * (zmax - zmin);
-    Real const expected_volume = domain_volume - 8.0_rt * stl_scale * stl_scale * stl_scale;
+    Real const expected_volume = fluid_inside ? body_volume : domain_volume - body_volume;
     Real const error = std::abs(fluid_volume - expected_volume);
     Real const max_dx =
         amrex::max(geom.CellSize(0), amrex::max(geom.CellSize(1), geom.CellSize(2)));

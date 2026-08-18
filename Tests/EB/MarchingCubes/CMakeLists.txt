@@ -15,6 +15,15 @@ set(_input_files
     inputs.multilevel.rebuild.mc
     inputs.nodal.mc
     inputs.open-stl.mc
+    inputs.box.mc
+    inputs.box.nodal.mc
+    inputs.sphere.mc
+    inputs.sphere.legacy
+    inputs.sphere.rebuild.mc
+    inputs.parser.mc
+    inputs.api.mc
+    inputs.api.host.mc
+    inputs.api.multilevel.mc
     cube.stl
     cubes.stl
     stanford_bunny.stl
@@ -60,6 +69,15 @@ add_mc_test_variant(EB_MarchingCubesCubes_3d inputs.cubes.mc)
 add_mc_test_variant(EB_MarchingCubesCubesLegacy_3d inputs.cubes.legacy)
 add_mc_test_variant(EB_MarchingCubesBunny_3d inputs.bunny.mc)
 add_mc_test_variant(EB_MarchingCubesBunnyLegacy_3d inputs.bunny.legacy)
+add_mc_test_variant(EB_MarchingCubesBox_3d inputs.box.mc)
+add_mc_test_variant(EB_MarchingCubesBoxNodal_3d inputs.box.nodal.mc)
+add_mc_test_variant(EB_MarchingCubesSphere_3d inputs.sphere.mc)
+add_mc_test_variant(EB_MarchingCubesSphereLegacy_3d inputs.sphere.legacy)
+add_mc_test_variant(EB_MarchingCubesSphereRebuild_3d inputs.sphere.rebuild.mc)
+add_mc_test_variant(EB_MarchingCubesParser_3d inputs.parser.mc)
+add_mc_test_variant(EB_MarchingCubesApi_3d inputs.api.mc)
+add_mc_test_variant(EB_MarchingCubesApiHost_3d inputs.api.host.mc)
+add_mc_test_variant(EB_MarchingCubesApiMultilevel_3d inputs.api.multilevel.mc)
 
 function(add_expected_failure _test_name _inputs_filename _expected_regex)
     set(_test_prefix)

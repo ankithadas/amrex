@@ -800,6 +800,27 @@ Embedded Boundary
    Fixing small and multi-cut cells is an iterative process. This parameter
    specifies the maximum number of iterations for the fix-up process.
 
+.. py:data:: eb2.geometry_method
+   :type: string
+   :value: legacy
+
+   Selects the generator used to build cut-cell geometry on the finest EB
+   level for every :py:data:`eb2.geom_type` and for
+   :cpp:`amrex::EB2::Build` calls with a user-provided implicit function.
+   ``legacy`` is the original EB2 construction. ``marching_cubes`` builds
+   single-valued cut cells from a marching-cubes (MC33) surface; it is
+   available in 3D on Cartesian grids with cubic cells only, and it is not
+   compatible with :cpp:`amrex::EB2::BuildMultiValuedMultiCut`. See
+   :ref:`sec:EB:ebinit:mc`. The former STL-only key
+   ``eb2.stl_geometry_method`` is still accepted as a deprecated alias.
+
+.. py:data:: eb2.mc_stl_file
+   :type: string
+
+   When ``eb2.geometry_method = marching_cubes``, write the final (repaired)
+   marching-cubes triangulation of the finest level to this ASCII STL file.
+   Mostly useful for visualization and debugging.
+
 Error Handling
 --------------
 

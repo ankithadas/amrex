@@ -6,6 +6,7 @@
 
 #include <AMReX_EB2_C.H>
 #include <AMReX_MarchingCubes.H>
+#include <AMReX_MFIter.H>
 #include <AMReX_mc_jgt_table.H>
 
 #include <algorithm>
@@ -2080,9 +2081,9 @@ GpuArray<int, 2> mark_cells_for_cleanup (Box const& bx, MCFab const& mc_fab,
     return {rejection_count.hostData()[0], rejection_count.hostData()[1]};
 }
 
-void write_stl (std::string const& filename, std::map<int, std::unique_ptr<MCFab>> const& mc_fabs,
-                BoxArray const& grids)
+void write_stl (std::string const& filename, LayoutData<MCFab> const& mc_fabs)
 {
+    BoxArray const& grids = mc_fabs.boxArray();
     int myproc = ParallelDescriptor::MyProc();
     int nprocs = ParallelDescriptor::NProcs();
 
@@ -2107,8 +2108,10 @@ void write_stl (std::string const& filename, std::map<int, std::unique_ptr<MCFab
                                      "Could not open marching-cubes STL output " + filename);
     ofs << std::setprecision(std::numeric_limits<Real>::max_digits10);
 
-    for (auto const& [k, p] : mc_fabs) {
-        AMREX_ALWAYS_ASSERT(k >= 0 && k < grids.size() && p->m_cell_data.box().contains(grids[k]));
+    for (MFIter mfi(mc_fabs); mfi.isValid(); ++mfi) {
+        int const k = mfi.index();
+        MCFab const* p = &mc_fabs[mfi];
+        AMREX_ALWAYS_ASSERT(p->m_cell_data.box().contains(grids[k]));
         auto ntri = int(p->m_triangles.v1.size());
         amrex::ignore_unused(ntri);
 

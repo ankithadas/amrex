@@ -12,14 +12,10 @@ IndexSpaceSTL::IndexSpaceSTL (const std::string& stl_file, Real stl_scale,
 {
     Gpu::LaunchSafeGuard lsg(true); // Always use GPU
 
-    std::string geometry_method("legacy");
-    ParmParse("eb2").query("stl_geometry_method",geometry_method);
-    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
-        geometry_method == "legacy" || geometry_method == "marching_cubes",
-        "eb2.stl_geometry_method must be legacy or marching_cubes");
-
     STLtools stl_tools;
-    stl_tools.setUseMarchingCubes(geometry_method == "marching_cubes");
+    // The marching-cubes generator requires a watertight, consistently oriented
+    // STL; the flag enables that validation when the file is read.
+    stl_tools.setUseMarchingCubes(geometryMethod() == GeometryMethod::marching_cubes);
     stl_tools.setBVHOptimization(bvh_optimization);
     stl_tools.read_stl_file(stl_file, stl_scale, stl_center, stl_reverse_normal);
 
