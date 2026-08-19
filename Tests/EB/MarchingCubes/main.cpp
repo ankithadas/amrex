@@ -91,6 +91,20 @@ struct ScaledGyroidIF : amrex::GPUable
     }
 };
 
+//! Implicit-function factories for check_scale_invariance().  These are named
+//! types rather than function-local lambdas because nvcc rejects an extended
+//! __device__ lambda inside a function template instantiated with a type local
+//! to a function.
+struct MakeTwoSphereShop
+{
+    auto operator() (Real scale) const { return EB2::makeShop(ScaledTwoSphereIF{{}, scale}); }
+};
+
+struct MakeGyroidShop
+{
+    auto operator() (Real scale) const { return EB2::makeShop(ScaledGyroidIF{{}, scale}); }
+};
+
 //! Build \p make_shop(scale) with the implicit function scaled by 1e-6, 1 and
 //! 1e6 (and once with a different EB2 box size) and require the same fluid
 //! volume and repaired-node count.
@@ -159,9 +173,7 @@ void check_scale_invariance (std::string const& name, int ncell, MakeShop const&
 
 void validate_scale_invariance ()
 {
-    check_scale_invariance("two spheres", 48, [] (Real scale) {
-        return EB2::makeShop(ScaledTwoSphereIF{{}, scale});
-    });
+    check_scale_invariance("two spheres", 48, MakeTwoSphereShop{});
     // Tunnel-rich, badly under-resolved geometry: needs the nodal repair and
     // takes a long cascade of repair passes.
     ParmParse ppeb2("eb2");
@@ -171,9 +183,7 @@ void validate_scale_invariance ()
     ppeb2.queryAdd("maxiter", maxiter);
     ppeb2.add("cover_multiple_cuts", 1);
     ppeb2.add("maxiter", 200);
-    check_scale_invariance("gyroid", 24, [] (Real scale) {
-        return EB2::makeShop(ScaledGyroidIF{{}, scale});
-    });
+    check_scale_invariance("gyroid", 24, MakeGyroidShop{});
     ppeb2.add("cover_multiple_cuts", cover_multiple_cuts);
     ppeb2.add("maxiter", maxiter);
 }
