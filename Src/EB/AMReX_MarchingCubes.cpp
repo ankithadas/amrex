@@ -32,24 +32,38 @@ namespace {
 LookUpTable* h_table = nullptr;
 LookUpTable* d_table = nullptr;
 
+/**
+ * Sign of a*c - b*d with a scale-free tie break: the products have the units
+ * of the level set squared, so a tie is declared relative to their magnitude
+ * rather than against an absolute epsilon.  Returns -1, 0 (tie) or 1.  Shared
+ * by the MC33 face decider and the interior (tunnel) test so that both are
+ * invariant under scaling of the implicit function.
+ */
+AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+int ambiguous_product_sign (Real a, Real c, Real b, Real d) noexcept
+{
+    Real const p = a*c;
+    Real const q = b*d;
+    Real const r = p - q;
+    Real const tol = Real(8.0)*std::numeric_limits<Real>::epsilon()*(std::abs(p)+std::abs(q));
+    if (std::abs(r) <= tol) { return 0; }
+    return (r > 0.0_rt) ? 1 : -1;
+}
+
 AMREX_GPU_DEVICE AMREX_FORCE_INLINE
 bool four_crossing_fluid_is_connected (Real const* levelset) noexcept
 {
-    Real const a = levelset[0]*levelset[2];
-    Real const b = levelset[1]*levelset[3];
-    Real const q = a - b;
-    // The tie break must be scale free: q has the units of the level set
-    // squared, so compare it against the magnitude of the terms being
-    // subtracted rather than an absolute epsilon.  |a|+|b| is invariant under
-    // the index rotations/reversals neighboring cells apply to a shared face.
-    if (std::abs(q) <= Real(8.0)*std::numeric_limits<Real>::epsilon()
-                       *(std::abs(a)+std::abs(b))) {
+    // The tie break is scale free (see ambiguous_product_sign); |a|+|b| is
+    // invariant under the index rotations/reversals neighboring cells apply
+    // to a shared face.
+    int const sign = ambiguous_product_sign(levelset[0], levelset[2], levelset[1], levelset[3]);
+    if (sign == 0) {
         // MC33's test_face tie break always selects the positive material.
         // Expressing the decision in material terms makes it invariant under
         // the rotations/reversals used by neighboring cells on a shared face.
         return true;
     }
-    return (levelset[0] > 0.0_rt) == (q > 0.0_rt);
+    return (levelset[0] > 0.0_rt) == (sign > 0);
 }
 
 AMREX_GPU_DEVICE AMREX_FORCE_INLINE
@@ -408,6 +422,14 @@ void process_cube (std::int8_t ipass, LookUpTable const* lut, int i, int j, int 
         case  7 :
         case 12 :
         case 13 :
+            // Lewiner's reference-edge shortcut: the interior test is taken on
+            // the plane through the reference edge with At = 0.  With that
+            // choice the tunnel alternatives 6.1.2, 7.4.2, 12.1.2 and 13.5.2
+            // are never selected (Bt >= 0 is equivalent to the face test that
+            // has already failed), so these cases always take the split
+            // tiling.  That is conservative for the EB builder: split cells
+            // hold two fluid corner groups and are rejected and repaired by
+            // mark_cells_for_cleanup, exactly as tunnel cells would be.
             switch( _case ) // NOLINT(bugprone-switch-missing-default-case)
             {
             case  6 : edge = lut->test6 [_config][2] ; break ;
@@ -519,12 +541,12 @@ void process_cube (std::int8_t ipass, LookUpTable const* lut, int i, int j, int 
         case  2 : return s>0 ;
         case  3 : return s>0 ;
         case  4 : return s>0 ;
-        case  5 : if( At * Ct - Bt * Dt <  FLT_EPSILON ) { return s>0 ; } break;
+        case  5 : if( ambiguous_product_sign(At,Ct,Bt,Dt) <= 0 ) { return s>0 ; } break;
         case  6 : return s>0 ;
         case  7 : return s<0 ;
         case  8 : return s>0 ;
         case  9 : return s>0 ;
-        case 10 : if( At * Ct - Bt * Dt >= FLT_EPSILON ) { return s>0 ; } break;
+        case 10 : if( ambiguous_product_sign(At,Ct,Bt,Dt) >= 0 ) { return s>0 ; } break;
         case 11 : return s<0 ;
         case 12 : return s>0 ;
         case 13 : return s<0 ;
@@ -1581,8 +1603,16 @@ void build_cell_fractions (
             if (eb_area <= tolerance) {
                 // The surface only touches this cell at a node or edge.  It
                 // has no measure inside the cell, so the fluid-side cell is
-                // regular rather than a zero-area cut cell.
+                // regular rather than a zero-area cut cell.  Write the full
+                // set of "no boundary in this cell" values explicitly in case
+                // a cut face still makes the cell single-valued downstream.
                 vfrac(i,j,k) = 1.0_rt;
+                barea(i,j,k) = 0.0_rt;
+                for (int d = 0; d < 3; ++d) {
+                    vcent(i,j,k,d) = 0.0_rt;
+                    bcent(i,j,k,d) = 0.0_rt;
+                    bnorm(i,j,k,d) = 0.0_rt;
+                }
                 return;
             }
             // The EB lies on one or more cell faces and this cell owns the
@@ -1907,7 +1937,7 @@ void extend_domain_face_levelset (Box const& node_box, Box const& domain,
     int const domhi_y = nodal_domain.bigEnd(1);
     int const domhi_z = nodal_domain.bigEnd(2);
 
-    int* const changed = counters + counter_changed_nodes;
+    int* const changed = counters + counter_extended_nodes;
     ParallelFor(node_box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
         int const ii = is_periodic[0] ? i : amrex::Clamp(i, domlo_x, domhi_x);
         int const jj = is_periodic[1] ? j : amrex::Clamp(j, domlo_y, domhi_y);
@@ -1917,6 +1947,12 @@ void extend_domain_face_levelset (Box const& node_box, Box const& domain,
             return;
         }
         Real const extended_value = sdf(ii, jj, kk);
+        // A repaired (exact-zero) exterior node stays covered: re-extending a
+        // fluid value onto it would undo the repair and could keep the repair
+        // loop from converging.
+        if (sdf(i, j, k) == 0.0_rt && extended_value > 0.0_rt) {
+            return;
+        }
         if (sdf(i, j, k) != extended_value) {
             sdf(i, j, k) = extended_value;
             Gpu::Atomic::AddNoRet(changed, 1);
@@ -1976,9 +2012,6 @@ void mark_cells_for_cleanup (Box const& bx, MCFab const& mc_fab,
     auto const sdf = sdf_fab.const_array();
     auto const vfrac = vfrac_fab.const_array();
     auto const rejected = rejected_fab.array();
-    auto const* tri_v1 = mc_fab.m_triangles.v1.data();
-    auto const* tri_v2 = mc_fab.m_triangles.v2.data();
-    auto const* tri_v3 = mc_fab.m_triangles.v3.data();
 
     static_assert(counter_small_cell_rejections == counter_topology_rejections + 1);
     int* const counts = counters + counter_topology_rejections;
@@ -1995,93 +2028,70 @@ void mark_cells_for_cleanup (Box const& bx, MCFab const& mc_fab,
         }
 
         int const triangle_count = cell_data(i, j, k, CellDataComponent::triangle_count);
-        int const triangle_offset = cell_data(i, j, k, CellDataComponent::triangle_offset);
         bool const is_cut = nfluid > 0 && nfluid < 8;
         bool bad_topology = is_cut && triangle_count <= 0;
 
-        // Count positive-corner components connected by cube edges.
+        // Count the fluid corner groups of the cell.  Corners are joined along
+        // the 12 cube edges and across every ambiguous (four-crossing) face
+        // whose MC33 decision says the two diagonal fluid corners are
+        // connected: that decision is what the extracted surface and the face
+        // apertures already use, so a group counted here is exactly a fluid
+        // region that touches the cell faces.  Corner groups that MC33 joins
+        // only through the cell interior (the tunnel tilings 4.1.2/10.1.2 and
+        // the 7.3/10.2/12.2/13.x variants) are deliberately NOT merged: a
+        // single-valued EB cell may hold one face-connected fluid region only,
+        // so such cells are rejected and repaired.
         int corner_parent[8];
         for (int n = 0; n < 8; ++n) {
             corner_parent[n] = n;
         }
+        auto find_root = [&] (int n) {
+            while (corner_parent[n] != n) { n = corner_parent[n]; }
+            return n;
+        };
+        auto join = [&] (int a, int b) {
+            int const ra = find_root(a);
+            int const rb = find_root(b);
+            if (ra != rb) { corner_parent[rb] = ra; }
+        };
         constexpr int edge_lo[12] = {0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3};
         constexpr int edge_hi[12] = {1, 2, 3, 0, 5, 6, 7, 4, 4, 5, 6, 7};
         for (int n = 0; n < 12; ++n) {
-            int const lo = edge_lo[n];
-            int const hi = edge_hi[n];
-            if (fluid[lo] && fluid[hi]) {
-                int lo_root = lo;
-                int hi_root = hi;
-                while (corner_parent[lo_root] != lo_root) {
-                    lo_root = corner_parent[lo_root];
-                }
-                while (corner_parent[hi_root] != hi_root) {
-                    hi_root = corner_parent[hi_root];
-                }
-                if (lo_root != hi_root) {
-                    corner_parent[hi_root] = lo_root;
-                }
+            if (fluid[edge_lo[n]] && fluid[edge_hi[n]]) {
+                join(edge_lo[n], edge_hi[n]);
+            }
+        }
+        // MC33 face ids 1..6 in cube-corner order, matching test_face()'s
+        // A,B,C,D and the bits stored in m_cell_data.
+        constexpr int face_corner[6][4] = {{0, 4, 5, 1}, {1, 5, 6, 2}, {2, 6, 7, 3},
+                                           {3, 7, 4, 0}, {0, 3, 2, 1}, {4, 7, 6, 5}};
+        int const valid_mask = cell_data(i, j, k, CellDataComponent::face_decision_valid_mask);
+        int const connected_mask =
+            cell_data(i, j, k, CellDataComponent::face_fluid_connected_mask);
+        for (int f = 0; f < 6; ++f) {
+            int const c0 = face_corner[f][0];
+            int const c1 = face_corner[f][1];
+            int const c2 = face_corner[f][2];
+            int const c3 = face_corner[f][3];
+            if (!(fluid[c0] == fluid[c2] && fluid[c1] == fluid[c3] && fluid[c0] != fluid[c1])) {
+                continue; // not an ambiguous face
+            }
+            int const bit = 1 << f;
+            Real const face_levelset[4] = {cube[c0], cube[c1], cube[c2], cube[c3]};
+            bool const connected = ((valid_mask & bit) != 0)
+                ? ((connected_mask & bit) != 0)
+                : four_crossing_fluid_is_connected(face_levelset);
+            if (connected) {
+                if (fluid[c0]) { join(c0, c2); } else { join(c1, c3); }
             }
         }
         int fluid_components = 0;
         for (int n = 0; n < 8; ++n) {
             if (fluid[n]) {
-                int corner_root = n;
-                while (corner_parent[corner_root] != corner_root) {
-                    corner_root = corner_parent[corner_root];
-                }
-                fluid_components += corner_root == n;
+                fluid_components += find_root(n) == n;
             }
         }
-
-        // MC33's connected tilings join otherwise separated corner groups
-        // through the cell interior. Triangle-patch connectivity records that
-        // resolution without treating triangle count itself as topology.
-        constexpr int max_cell_triangles = 16;
-        int triangle_parent[max_cell_triangles];
-        int triangle_components = 0;
-        if (triangle_count > max_cell_triangles) {
-            bad_topology = true;
-        } else {
-            for (int n = 0; n < triangle_count; ++n) {
-                triangle_parent[n] = n;
-            }
-            for (int n = 0; n < triangle_count; ++n) {
-                int const mn = triangle_offset + n;
-                int const nv[3] = {tri_v1[mn], tri_v2[mn], tri_v3[mn]};
-                for (int m = n + 1; m < triangle_count; ++m) {
-                    int const mm = triangle_offset + m;
-                    int const mv[3] = {tri_v1[mm], tri_v2[mm], tri_v3[mm]};
-                    bool share_vertex = false;
-                    for (int const vertex_n : nv) {
-                        for (int const vertex_m : mv) {
-                            share_vertex = share_vertex || vertex_n == vertex_m;
-                        }
-                    }
-                    if (share_vertex) {
-                        int n_root = n;
-                        int m_root = m;
-                        while (triangle_parent[n_root] != n_root) {
-                            n_root = triangle_parent[n_root];
-                        }
-                        while (triangle_parent[m_root] != m_root) {
-                            m_root = triangle_parent[m_root];
-                        }
-                        if (n_root != m_root) {
-                            triangle_parent[m_root] = n_root;
-                        }
-                    }
-                }
-            }
-            for (int n = 0; n < triangle_count; ++n) {
-                int triangle_root = n;
-                while (triangle_parent[triangle_root] != triangle_root) {
-                    triangle_root = triangle_parent[triangle_root];
-                }
-                triangle_components += triangle_root == n;
-            }
-        }
-        bad_topology = bad_topology || (fluid_components > 1 && triangle_components > 1);
+        bad_topology = bad_topology || fluid_components > 1;
 
         // A negative sentinel means geometry construction rejected the closed
         // boundary. Cover it and let the next MC pass rebuild its neighbors.

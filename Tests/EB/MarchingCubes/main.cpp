@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <limits>
 #include <utility>
+#include <vector>
 
 using namespace amrex;
 
@@ -68,11 +69,35 @@ struct ScaledTwoSphereIF : amrex::GPUable
     }
 };
 
-//! Build the same geometry with the implicit function scaled by 1e-6, 1 and 1e6
-//! and require the same fluid volume and repaired-node count.
-void validate_scale_invariance ()
+/**
+ * Coarsely resolved high-frequency gyroid (fluid outside).  Its saddles produce
+ * MC33 case-4/10 cells, so the interior (tunnel) test and the nodal repair of
+ * tunnel cells are exercised; both must be independent of the scale.
+ */
+struct ScaledGyroidIF : amrex::GPUable
 {
-    Box const domain(IntVect(0), IntVect(47));
+    Real m_scale;
+
+    AMREX_GPU_HOST_DEVICE Real operator() (AMREX_D_DECL(Real x, Real y, Real z)) const noexcept
+    {
+        constexpr Real k = 21.0_rt;
+        return m_scale*(std::sin(k*x)*std::cos(k*y) + std::sin(k*y)*std::cos(k*z)
+                        + std::sin(k*z)*std::cos(k*x) - 0.1_rt);
+    }
+
+    Real operator() (RealArray const& p) const noexcept
+    {
+        return this->operator()(AMREX_D_DECL(p[0], p[1], p[2]));
+    }
+};
+
+//! Build \p make_shop(scale) with the implicit function scaled by 1e-6, 1 and
+//! 1e6 (and once with a different EB2 box size) and require the same fluid
+//! volume and repaired-node count.
+template <class MakeShop>
+void check_scale_invariance (std::string const& name, int ncell, MakeShop const& make_shop)
+{
+    Box const domain(IntVect(0), IntVect(ncell - 1));
     Geometry const geom(domain, RealBox({-1.2_rt, -1.2_rt, -1.2_rt}, {1.2_rt, 1.2_rt, 1.2_rt}),
                         0, {0, 0, 0});
     BoxArray ba(domain);
@@ -91,7 +116,7 @@ void validate_scale_invariance ()
     Long reference_zero_nodes = -1;
     for (auto const& [scale, eb_max_grid_size] : variants) {
         EB2::max_grid_size = eb_max_grid_size;
-        EB2::Build(EB2::makeShop(ScaledTwoSphereIF{{}, scale}), geom, 0, 0, 4);
+        EB2::Build(make_shop(scale), geom, 0, 0, 4);
         auto factory = makeEBFabFactory(geom, ba, dm, {1, 1, 1}, EBSupport::full);
         Real const volume = factory->getVolFrac().sum() * geom.CellSize(0) * geom.CellSize(1)
                             * geom.CellSize(2);
@@ -108,8 +133,8 @@ void validate_scale_invariance ()
         }
         Long global_zero_nodes = zero_node_count.dataValue();
         ParallelAllReduce::Sum(global_zero_nodes, ParallelContext::CommunicatorSub());
-        amrex::Print() << "Scale " << scale << ", eb2.max_grid_size " << eb_max_grid_size
-                       << ": fluid volume " << volume
+        amrex::Print() << name << ": scale " << scale << ", eb2.max_grid_size "
+                       << eb_max_grid_size << ": fluid volume " << volume
                        << ", zero level-set nodes " << global_zero_nodes << "\n";
         // The variants share every sign decision, so only the root finding
         // (scale) and the summation order (decomposition) may differ at
@@ -130,6 +155,27 @@ void validate_scale_invariance ()
         EB2::IndexSpace::pop();
     }
     EB2::max_grid_size = saved_max_grid_size;
+}
+
+void validate_scale_invariance ()
+{
+    check_scale_invariance("two spheres", 48, [] (Real scale) {
+        return EB2::makeShop(ScaledTwoSphereIF{{}, scale});
+    });
+    // Tunnel-rich, badly under-resolved geometry: needs the nodal repair and
+    // takes a long cascade of repair passes.
+    ParmParse ppeb2("eb2");
+    int cover_multiple_cuts = 0;
+    int maxiter = 32;
+    ppeb2.queryAdd("cover_multiple_cuts", cover_multiple_cuts);
+    ppeb2.queryAdd("maxiter", maxiter);
+    ppeb2.add("cover_multiple_cuts", 1);
+    ppeb2.add("maxiter", 200);
+    check_scale_invariance("gyroid", 24, [] (Real scale) {
+        return EB2::makeShop(ScaledGyroidIF{{}, scale});
+    });
+    ppeb2.add("cover_multiple_cuts", cover_multiple_cuts);
+    ppeb2.add("maxiter", maxiter);
 }
 
 //! A zeroed marching-cubes counter block for one FAB.
@@ -266,6 +312,151 @@ void validate_mc33_vertex_indices ()
             AMREX_ALWAYS_ASSERT(v3[n] >= 0 && v3[n] < nvertices);
         }
     }
+}
+
+/**
+ * A single-valued cell may hold exactly one face-connected fluid region.  For
+ * every corner-sign mask and several magnitude patterns (chosen so that the
+ * MC33 face and interior tests take both branches, including the 4.1.2 /
+ * 10.1.2 tunnel tilings), run the extraction and the cell rejection rule and
+ * check that a cell is rejected exactly when its fluid corners form more than
+ * one group under cube-edge adjacency plus MC33-resolved connected ambiguous
+ * faces.  In particular every tunnel (one connected surface patch joining two
+ * corner groups through the interior) must be rejected.
+ */
+void validate_cell_topology_rejection ()
+{
+    Box const cell_box(IntVect(0), IntVect(0));
+    Box const node_box = amrex::surroundingNodes(cell_box);
+    Geometry const geom(cell_box, RealBox({0.0_rt, 0.0_rt, 0.0_rt}, {1.0_rt, 1.0_rt, 1.0_rt}),
+                        0, {0, 0, 0});
+    // MC33 face ids 1..6 in cube-corner order (test_face's A,B,C,D).
+    constexpr int face_corner[6][4] = {{0, 4, 5, 1}, {1, 5, 6, 2}, {2, 6, 7, 3},
+                                       {3, 7, 4, 0}, {0, 3, 2, 1}, {4, 7, 6, 5}};
+    constexpr int edge_lo[12] = {0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3};
+    constexpr int edge_hi[12] = {1, 2, 3, 0, 5, 6, 7, 4, 4, 5, 6, 7};
+
+    unsigned int seed = 12345U;
+    auto next_magnitude = [&seed] () {
+        seed = seed * 1664525U + 1013904223U;              // LCG, deterministic
+        return 0.05_rt + 3.0_rt * static_cast<Real>(seed >> 8) / 16777216.0_rt;
+    };
+
+    // Every mask a few times, plus many draws of the MC33 case-4 masks (two
+    // body-diagonal fluid corners), whose interior test selects the 4.1.2
+    // tunnel for roughly one draw in a hundred.
+    constexpr int case4_masks[8] = {65, 130, 20, 40, 190, 125, 235, 215};
+    auto configurations = [&] (int trial, int slot) {
+        return trial < 24 ? slot + 1 : case4_masks[slot % 8];
+    };
+    Long checked = 0, rejected_cells = 0, tunnels = 0, mismatches = 0;
+    for (int trial = 0; trial < 24 + 40; ++trial) {
+        int const nslots = trial < 24 ? 254 : 8 * 8;
+        for (int slot = 0; slot < nslots; ++slot) {
+            int const mask = configurations(trial, slot);
+            GpuArray<Real, 8> values{};
+            for (int n = 0; n < 8; ++n) {
+                Real const magnitude = next_magnitude();
+                values[n] = (mask & (1 << n)) != 0 ? magnitude : -magnitude;
+            }
+            FArrayBox sdf(node_box, 1);
+            auto const phi = sdf.array();
+            ParallelFor(node_box, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+                int const n = 4 * k + (j == 0 ? i : 3 - i);
+                phi(i, j, k) = values[n];
+            });
+
+            MC::MCFab result;
+            auto counters = make_fab_counters();
+            MC::marching_cubes(geom, sdf, result, counters.data());
+            FArrayBox vfrac(cell_box, 1);
+            vfrac.setVal<RunOn::Device>(0.5_rt);      // no small-cell or sentinel rejection
+            IArrayBox rejected(cell_box, 1);
+            rejected.setVal<RunOn::Device>(0);
+            MC::mark_cells_for_cleanup(cell_box, result, sdf, vfrac, 0.0_rt, rejected,
+                                       counters.data());
+            Gpu::streamSynchronize();
+
+            GpuArray<int, MC::num_cell_data_components> cell_data{};
+            Gpu::dtoh_memcpy(cell_data.data(), result.m_cell_data.dataPtr(), sizeof(cell_data));
+            int rejected_flag = 0;
+            Gpu::dtoh_memcpy(&rejected_flag, rejected.dataPtr(), sizeof(int));
+            AMREX_ALWAYS_ASSERT(fab_counter(counters, MC::counter_invalid_triangles) == 0);
+
+            // Reference: fluid corner groups joined along edges and across
+            // ambiguous faces whose stored MC33 decision is "connected".
+            bool fluid[8];
+            for (int n = 0; n < 8; ++n) { fluid[n] = values[n] > 0.0_rt; }
+            int parent[8];
+            for (int n = 0; n < 8; ++n) { parent[n] = n; }
+            auto root = [&] (int n) { while (parent[n] != n) { n = parent[n]; } return n; };
+            auto join = [&] (int a, int b) { int ra = root(a), rb = root(b); if (ra != rb) { parent[rb] = ra; } };
+            for (int e = 0; e < 12; ++e) {
+                if (fluid[edge_lo[e]] && fluid[edge_hi[e]]) { join(edge_lo[e], edge_hi[e]); }
+            }
+            for (int f = 0; f < 6; ++f) {
+                int const c0 = face_corner[f][0], c1 = face_corner[f][1];
+                int const c2 = face_corner[f][2], c3 = face_corner[f][3];
+                if (!(fluid[c0] == fluid[c2] && fluid[c1] == fluid[c3] && fluid[c0] != fluid[c1])) {
+                    continue;
+                }
+                AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+                    (cell_data[MC::face_decision_valid_mask] & (1 << f)) != 0,
+                    "An ambiguous face has no stored MC33 decision");
+                if ((cell_data[MC::face_fluid_connected_mask] & (1 << f)) != 0) {
+                    if (fluid[c0]) { join(c0, c2); } else { join(c1, c3); }
+                }
+            }
+            int groups = 0;
+            for (int n = 0; n < 8; ++n) { groups += fluid[n] && root(n) == n; }
+
+            // Tunnel: several corner groups but a single connected surface patch.
+            int const ntri = cell_data[MC::triangle_count];
+            bool single_patch = ntri > 0;
+            if (groups > 1 && ntri > 0) {
+                Gpu::PinnedVector<int> v1(ntri), v2(ntri), v3(ntri);
+                Gpu::dtoh_memcpy(v1.data(), result.m_triangles.v1.data(), ntri * sizeof(int));
+                Gpu::dtoh_memcpy(v2.data(), result.m_triangles.v2.data(), ntri * sizeof(int));
+                Gpu::dtoh_memcpy(v3.data(), result.m_triangles.v3.data(), ntri * sizeof(int));
+                Gpu::streamSynchronize();
+                std::vector<int> tparent(ntri);
+                for (int t = 0; t < ntri; ++t) { tparent[t] = t; }
+                auto troot = [&] (int t) { while (tparent[t] != t) { t = tparent[t]; } return t; };
+                for (int a = 0; a < ntri; ++a) {
+                    for (int b = a + 1; b < ntri; ++b) {
+                        int const va[3] = {v1[a], v2[a], v3[a]};
+                        int const vb[3] = {v1[b], v2[b], v3[b]};
+                        bool share = false;
+                        for (int const x : va) { for (int const y : vb) { share = share || x == y; } }
+                        if (share) { int ra = troot(a), rb = troot(b); if (ra != rb) { tparent[rb] = ra; } }
+                    }
+                }
+                int patches = 0;
+                for (int t = 0; t < ntri; ++t) { patches += troot(t) == t; }
+                single_patch = patches == 1;
+                if (single_patch) { ++tunnels; }
+            }
+
+            bool const expect_rejected = groups > 1;
+            ++checked;
+            rejected_cells += rejected_flag != 0;
+            if ((rejected_flag != 0) != expect_rejected) {
+                ++mismatches;
+                amrex::Print() << "  mask " << mask << " trial " << trial << ": groups=" << groups
+                               << " rejected=" << rejected_flag << " triangles=" << ntri << "\n";
+            }
+            if (groups > 1 && single_patch) {
+                AMREX_ALWAYS_ASSERT_WITH_MESSAGE(rejected_flag != 0,
+                                                 "An MC33 tunnel cell was not rejected");
+            }
+        }
+    }
+    amrex::Print() << "Cell topology rule: " << checked << " configurations, " << rejected_cells
+                   << " rejected, " << tunnels << " tunnel tilings (all rejected)\n";
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(mismatches == 0,
+                                     "Cell rejection disagrees with the face-connected corner groups");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(tunnels > 0,
+                                     "The topology test did not exercise any tunnel tiling");
 }
 
 void validate_exact_ambiguous_face_fraction ()
@@ -499,6 +690,7 @@ void main_main ()
     if (algorithm_tests) {
         validate_mc33_face_decisions();
         validate_mc33_vertex_indices();
+        validate_cell_topology_rejection();
         validate_exact_ambiguous_face_fraction();
         validate_nodal_stl_face_levelset();
     }

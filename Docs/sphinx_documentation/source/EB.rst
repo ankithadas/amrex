@@ -264,7 +264,12 @@ following restrictions:
   coarsening are unaffected. It is ignored for ``eb2.geom_type = chkpt_file``.
 
 The generator produces at most one fluid volume per cell and one connected
-fluid aperture per Cartesian face. Unsupported topology is an error by
+fluid aperture per Cartesian face. A cell is kept only when its fluid corners
+form a single group connected along cell edges or across ambiguous faces that
+MC33 resolves as connected; configurations whose fluid regions would only be
+joined through the cell interior (the MC33 "tunnel" tilings) or that split
+into several regions are treated as unsupported topology, so sub-cell tunnels
+are never represented. Unsupported topology is an error by
 default. Setting ``eb2.cover_multiple_cuts = 1`` enables the same monotone
 nodal repair used by the default generator: fluid nodes incident to an
 unsupported face or cell are moved to exact zero and the geometry is rebuilt.

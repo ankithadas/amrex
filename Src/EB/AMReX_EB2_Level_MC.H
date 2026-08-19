@@ -144,6 +144,17 @@ void fill_marching_cubes_edge_intersections (G const& gshop, FArrayBox const& sd
         auto const problo = geom.ProbLoArray();
         auto const dx = geom.CellSizeArray();
 
+        // The nodal field has been synchronized across FABs and periodic
+        // images, so its ghost nodes need not agree with the implicit function
+        // evaluated at their physical coordinates (a non-periodic function in
+        // a periodic domain).  Root finding brackets with the function itself,
+        // so decide which edges to bracket from a raw sample of the function
+        // (EB2 convention: positive in the body).
+        FArrayBox raw(sdf_fab.box(), 1, The_Arena());
+        Elixir raw_eli = raw.elixir();
+        gshop.fillFab(raw, geom, run_on, raw.box());
+        auto const raw_if = raw.const_array();
+
         Array<BaseFab<Type_t>,AMREX_SPACEDIM> type_fabs;
         Array<BaseFab<Real>,AMREX_SPACEDIM> inter_fabs;
         Array<Array4<Type_t const>,AMREX_SPACEDIM> type_arrs;
@@ -165,7 +176,14 @@ void fill_marching_cubes_edge_intersections (G const& gshop, FArrayBox const& sd
                 // when the zero came from snapping a roundoff-level value.
                 bool const strict_sign_change = (lo > 0.0_rt && hi < 0.0_rt)
                                              || (lo < 0.0_rt && hi > 0.0_rt);
-                type(i,j,k) = strict_sign_change ? Type::irregular : Type::regular;
+                Real const raw_lo = raw_if(i,j,k);
+                Real const raw_hi = raw_if(i+shift[0],j+shift[1],k+shift[2]);
+                bool const bracketed = (raw_lo > 0.0_rt && raw_hi < 0.0_rt)
+                                    || (raw_lo < 0.0_rt && raw_hi > 0.0_rt);
+                // Edges where the synchronized field changes sign but the
+                // function does not keep the linear fallback.
+                type(i,j,k) = (strict_sign_change && bracketed) ? Type::irregular
+                                                                : Type::regular;
             });
             type_arrs[idim] = type_fabs[idim].const_array();
             inter_arrs[idim] = inter_fabs[idim].array();

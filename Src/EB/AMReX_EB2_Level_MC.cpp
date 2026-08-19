@@ -178,12 +178,12 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
     }
 
     iMultiFab rejected_cells(m_grids, m_dmap, 1, IntVect(1), mf_info);
+    // One ghost layer in every direction so that the arrays cover all faces
+    // build_face_fractions evaluates on grow(vbx,1); degenerate faces in the
+    // outer ring are then marked and repaired like any other.
     Array<iMultiFab, AMREX_SPACEDIM> rejected_faces;
     for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
-        IntVect const transverse_ghost =
-            IntVect::TheUnitVector() - IntVect::TheDimensionVector(idim);
-        rejected_faces[idim].define(m_areafrac[idim].boxArray(), m_dmap, 1,
-                                    transverse_ghost, mf_info);
+        rejected_faces[idim].define(m_areafrac[idim].boxArray(), m_dmap, 1, IntVect(1), mf_info);
     }
     bool converged = false;
     for (int iter = 0; iter < maxiter; ++iter) {
@@ -297,6 +297,8 @@ Level::build_marching_cubes_level (Geometry const& geom, bool extend_domain_face
             }
         }
         counters.reduce();
+        // Only the repair itself counts toward progress; the domain-face
+        // extension has its own slot so it cannot mask a stalled repair.
         int const changed_nodes = counters.total(MC::counter_changed_nodes);
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(changed_nodes > 0,
                                          "Marching-cubes EB repair found rejected "

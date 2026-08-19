@@ -89,7 +89,8 @@ enum FabCounter : int {
     counter_face_rejections,         //!< mark_faces_for_cleanup
     counter_topology_rejections,     //!< mark_cells_for_cleanup
     counter_small_cell_rejections,   //!< mark_cells_for_cleanup
-    counter_changed_nodes,           //!< zero_nodes_for_cleanup, extend_domain_face_levelset
+    counter_changed_nodes,           //!< zero_nodes_for_cleanup
+    counter_extended_nodes,          //!< extend_domain_face_levelset
     num_fab_counters
 };
 
@@ -227,9 +228,17 @@ void mark_faces_for_cleanup (
 /**
  * \brief Mark cells that the single-VoF MC builder must remove.
  *
- * A cell is rejected if its MC boundary is invalid, its resolved fluid
- * topology has more than one fluid component, or its volume fraction is below
- * \p small_volfrac. Face-aperture rejection is handled separately.
+ * A cell is rejected if its MC boundary is invalid, if its fluid corners form
+ * more than one group, or if its volume fraction is below \p small_volfrac.
+ * Corner groups are joined along cube edges and across ambiguous faces whose
+ * MC33 decision is "fluid connected" (the same decision the surface and the
+ * face apertures use), but never through the cell interior: MC33 tunnel
+ * tilings (4.1.2, 10.1.2, ...) and the split tilings 7.3/10.2/12.2/13.x are
+ * always rejected, so an exported single-valued cell holds exactly one
+ * face-connected fluid region.  Face-aperture rejection is handled separately
+ * by mark_faces_for_cleanup and is consistent with this rule (a face whose
+ * decision is "not connected" is a rejected face and also splits the corner
+ * groups of both cells).
  *
  * Topology and small-cell rejections are added to counter_topology_rejections
  * and counter_small_cell_rejections of \p counters.  \p rejected records the
@@ -260,8 +269,10 @@ void zero_nodes_for_cleanup (
  * An exterior node is assigned the value of the corresponding physical-face
  * node only when it is outside in exactly one non-periodic direction. This
  * preserves the feature's transverse footprint and does not extend diagonally
- * from domain edges or corners.  The number of exterior nodal values changed
- * is added to counter_changed_nodes of \p counters.
+ * from domain edges or corners.  Exterior nodes that the nodal repair has
+ * moved to exact zero are left at zero, so the repair stays monotone.  The
+ * number of exterior nodal values changed is added to counter_extended_nodes
+ * of \p counters.
  */
 void extend_domain_face_levelset (
     Box const& node_box, Box const& domain, GpuArray<int,3> const& is_periodic,

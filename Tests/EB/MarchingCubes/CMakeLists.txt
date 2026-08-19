@@ -26,6 +26,7 @@ set(_input_files
     inputs.api.multilevel.mc
     inputs.box.periodic.mc
     inputs.box.periodic.legacy
+    inputs.sphere.periodic.mc
     inputs.box.crossing.mc
     inputs.scale.mc
     inputs.gyroid.mc
@@ -87,6 +88,7 @@ add_mc_test_variant(EB_MarchingCubesApiHost_3d inputs.api.host.mc)
 add_mc_test_variant(EB_MarchingCubesApiMultilevel_3d inputs.api.multilevel.mc)
 add_mc_test_variant(EB_MarchingCubesBoxPeriodic_3d inputs.box.periodic.mc)
 add_mc_test_variant(EB_MarchingCubesBoxPeriodicLegacy_3d inputs.box.periodic.legacy)
+add_mc_test_variant(EB_MarchingCubesSpherePeriodic_3d inputs.sphere.periodic.mc)
 add_mc_test_variant(EB_MarchingCubesBoxCrossing_3d inputs.box.crossing.mc)
 add_mc_test_variant(EB_MarchingCubesScaleInvariance_3d inputs.scale.mc)
 add_mc_test_variant(EB_MarchingCubesGyroid_3d inputs.gyroid.mc)
