@@ -280,10 +280,10 @@ namespace {
                            e[0][0]*e[1][1]-e[0][1]*e[1][0]};
         if (separated(n)) { return false; }
         // cross products of the box axes and the triangle edges
-        for (int t = 0; t < 3; ++t) {
-            Real const ax[3] = {Real(0), -e[t][2], e[t][1]};
-            Real const ay[3] = {e[t][2], Real(0), -e[t][0]};
-            Real const az[3] = {-e[t][1], e[t][0], Real(0)};
+        for (auto const& edge : e) {
+            Real const ax[3] = {Real(0), -edge[2], edge[1]};
+            Real const ay[3] = {edge[2], Real(0), -edge[0]};
+            Real const az[3] = {-edge[1], edge[0], Real(0)};
             if (separated(ax) || separated(ay) || separated(az)) { return false; }
         }
         return true;
