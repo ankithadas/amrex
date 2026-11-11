@@ -13,8 +13,10 @@ set(_input_files
    inputs.bunny.legacy
    inputs.multilevel.mc
    inputs.multilevel.rebuild.mc
+   inputs.multilevel.stl.mc
    inputs.nodal.mc
    inputs.open-stl.mc
+   inputs.open-stl.multilevel.mc
    inputs.box.mc
    inputs.box.nodal.mc
    inputs.sphere.mc
@@ -70,6 +72,7 @@ endfunction ()
 
 add_mc_test_variant(EB_MarchingCubesMultilevel_3d inputs.multilevel.mc)
 add_mc_test_variant(EB_MarchingCubesMultilevelRebuild_3d inputs.multilevel.rebuild.mc)
+add_mc_test_variant(EB_MarchingCubesMultilevelSTL_3d inputs.multilevel.stl.mc)
 add_mc_test_variant(EB_MarchingCubesNodal_3d inputs.nodal.mc)
 add_mc_test_variant(EB_MarchingCubesCubeLegacy_3d inputs.cube.legacy)
 add_mc_test_variant(EB_MarchingCubesCubes_3d inputs.cubes.mc)
@@ -123,6 +126,8 @@ endfunction ()
 
 add_expected_failure(EB_MarchingCubesRejectOpenSTL_3d
    inputs.open-stl.mc "STL is open, nonmanifold, or inconsistently oriented")
+add_expected_failure(EB_MarchingCubesRejectOpenSTLMultilevel_3d
+   inputs.open-stl.multilevel.mc "STL is open, nonmanifold, or inconsistently oriented")
 add_expected_failure(EB_MarchingCubesRejectNoCover_3d
    inputs.gyroid.nocover.mc "set eb2.cover_multiple_cuts=1")
 add_expected_failure(EB_MarchingCubesRejectNonCubic_3d

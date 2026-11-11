@@ -47,6 +47,30 @@ public:
                   bool extend_domain_face, int num_coarsen_opt,
                   bool bvh_optimization, bool support_mvmc);
 
+   /**
+    * \brief Build an EB index space from an STL file on a given set of levels.
+    *
+    * Each level in \p geom is built directly from the STL geometry rather than
+    * by coarsening a finer level. The levels may be given in any order; they
+    * are stored from finest to coarsest. The cut-cell generator follows
+    * ``eb2.geometry_method``, as for the other constructor.
+    *
+    * \param stl_file            Path to the STL file.
+    * \param stl_scale           Scale factor applied to the STL vertices.
+    * \param stl_center          Translation applied after scaling.
+    * \param stl_reverse_normal  If non-zero, flip triangle normals.
+    * \param geom                Geometry of every level to build.
+    * \param ngrow               Number of EB ghost cells to build on each level.
+    * \param extend_domain_face  Extend EB description beyond the domain from the domain faces.
+    * \param num_coarsen_opt     Number of coarse probes to try before rebuilding at full resolution.
+    * \param bvh_optimization    Enable BVH acceleration for intersection tests.
+    */
+   IndexSpaceSTL (const std::string& stl_file, Real stl_scale,
+                  Array<Real,3> const& stl_center, int stl_reverse_normal,
+                  Vector<Geometry> geom, int ngrow,
+                  bool extend_domain_face, int num_coarsen_opt,
+                  bool bvh_optimization);
+
     IndexSpaceSTL (IndexSpaceSTL const&) = delete;
     IndexSpaceSTL (IndexSpaceSTL &&) = delete;
     void operator= (IndexSpaceSTL const&) = delete;

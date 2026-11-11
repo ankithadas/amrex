@@ -1,5 +1,7 @@
 #include <AMReX_EB2_IndexSpace_STL.H>
 
+#include <algorithm>
+
 namespace amrex::EB2 {
 
 IndexSpaceSTL::IndexSpaceSTL (const std::string& stl_file, Real stl_scale,
@@ -75,6 +77,38 @@ IndexSpaceSTL::IndexSpaceSTL (const std::string& stl_file, Real stl_scale,
         }
         m_geom.push_back(cgeom);
         m_domain.push_back(cdomain);
+        m_ngrow.push_back(ng);
+    }
+}
+
+IndexSpaceSTL::IndexSpaceSTL (const std::string& stl_file, Real stl_scale,
+                              Array<Real,3> const& stl_center, int stl_reverse_normal,
+                              Vector<Geometry> geom, int ngrow,
+                              bool extend_domain_face, int num_coarsen_opt,
+                              bool bvh_optimization)
+{
+    Gpu::LaunchSafeGuard lsg(true); // Always use GPU
+
+    // finest level first
+    std::sort(geom.begin(), geom.end(), [] (Geometry const& a, Geometry const& b)
+              { return a.Domain().numPts() > b.Domain().numPts(); });
+
+    STLtools stl_tools;
+    // Marching cubes requires a watertight, consistently oriented STL.
+    stl_tools.setUseMarchingCubes(GetGeometryMethod() == GeometryMethod::marching_cubes);
+    stl_tools.setBVHOptimization(bvh_optimization);
+    stl_tools.read_stl_file(stl_file, stl_scale, stl_center, stl_reverse_normal);
+
+    auto const nlevels = int(geom.size());
+    int const ng = std::max(ngrow,0);
+    m_stllevel.reserve(nlevels);
+    for (int ilev = 0; ilev < nlevels; ++ilev)
+    {
+        m_stllevel.emplace_back(this, stl_tools, geom[ilev], EB2::max_grid_size, ng,
+                                extend_domain_face, num_coarsen_opt-ilev, false,
+                                ilev == 0);
+        m_geom.push_back(geom[ilev]);
+        m_domain.push_back(geom[ilev].Domain());
         m_ngrow.push_back(ng);
     }
 }

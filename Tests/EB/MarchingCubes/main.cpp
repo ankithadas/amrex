@@ -2,6 +2,7 @@
 #include <AMReX.H>
 #include <AMReX_EB2.H>
 #include <AMReX_EB2_IF_Sphere.H>
+#include <AMReX_EB2_IndexSpace_STL.H>
 #include <AMReX_EBFabFactory.H>
 #include <AMReX_EB_STL_utils.H>
 #include <AMReX_MarchingCubes.H>
@@ -13,6 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -749,6 +751,7 @@ void main_main ()
     std::string geom_type("stl");
     std::string api_build;
     bool api_all_levels = false;
+    bool stl_all_levels = false;
     bool allow_full_volume_cut_cells = false;
     std::vector<int> is_periodic{0, 0, 0};
     std::string stl_file("cube.stl");
@@ -776,6 +779,9 @@ void main_main ()
         pp.query("api_build", api_build);
         // Build every coarse level from the GeometryShop instead of coarsening.
         pp.query("api_all_levels", api_all_levels);
+        // Build every level from the STL file with the Vector<Geometry>
+        // IndexSpaceSTL constructor.
+        pp.query("stl_all_levels", stl_all_levels);
         std::vector<Real> prob_lo{xmin, ymin, zmin};
         std::vector<Real> prob_hi{xmax, ymax, zmax};
         ParmParse ppgeom("geometry");
@@ -862,7 +868,25 @@ void main_main ()
     DistributionMapping dm(ba);
 
     double t0 = amrex::second();
-    if (api_build.empty()) {
+    if (stl_all_levels) {
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(api_build.empty() && geom_type == "stl",
+                                         "stl_all_levels requires eb2.geom_type = stl");
+        // Pass the levels coarsest first; the constructor orders them.
+        Vector<Geometry> all_geoms{geom};
+        for (int ilev = 1; ilev <= max_coarsening_level; ++ilev) {
+            all_geoms.push_back(amrex::coarsen(all_geoms.back(), 2));
+        }
+        std::reverse(all_geoms.begin(), all_geoms.end());
+        ParmParse ppeb2("eb2");
+        bool stl_reverse_normal = false;
+        ppeb2.queryAdd("stl_reverse_normal", stl_reverse_normal);
+        bool stl_use_bvh = true;
+        ppeb2.queryAdd("stl_use_bvh", stl_use_bvh);
+        EB2::IndexSpace::push(std::make_unique<EB2::IndexSpaceSTL>(
+            stl_file, stl_scale, Array<Real,3>{stl_center[0], stl_center[1], stl_center[2]},
+            int(stl_reverse_normal), all_geoms, 4, EB2::ExtendDomainFace(),
+            EB2::NumCoarsenOpt(), stl_use_bvh));
+    } else if (api_build.empty()) {
         EB2::Build(geom, required_coarsening_level, max_coarsening_level, 4,
                    build_coarse_level_by_coarsening);
     } else {
