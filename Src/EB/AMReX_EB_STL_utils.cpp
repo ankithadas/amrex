@@ -1928,6 +1928,11 @@ void STLtools::fillMarchingCubesEdgeIntersections (
     int const num_triangles = m_num_tri;
     bool const use_bvh = m_bvh_optimization;
 
+    // roundoff in the node and triangle coordinates
+    Real const tol = Real(16) * std::numeric_limits<Real>::epsilon()
+        * amrex::max(std::abs(m_ptmin.x), std::abs(m_ptmin.y), std::abs(m_ptmin.z),
+                     std::abs(m_ptmax.x), std::abs(m_ptmax.y), std::abs(m_ptmax.z));
+
     auto find_x = [=] AMREX_GPU_DEVICE (int i, int j, int k,
                                         Real& fraction) noexcept {
         XDim3 const p1{.x = plo[0]+static_cast<Real>(i)*dx[0],
@@ -1942,7 +1947,7 @@ void STLtools::fillMarchingCubesEdgeIntersections (
             for (int it = 0; it < ntri; ++it) {
                 auto const hit = edge_tri_intersects(
                     p1.x, x2, p1.y, p1.z, tris[it].v1, tris[it].v2,
-                    tris[it].v3, norms[it], sdf(i,j,k)-sdf(i+1,j,k));
+                    tris[it].v3, norms[it], sdf(i,j,k)-sdf(i+1,j,k), tol);
                 if (hit.first) {
                     Real const candidate = amrex::Clamp(
                         (hit.second-p1.x)/dx[0], 0.0_rt, 1.0_rt);
@@ -1959,7 +1964,7 @@ void STLtools::fillMarchingCubesEdgeIntersections (
         if (use_bvh) {
             Real a[3] = {p1.x,p1.y,p1.z};
             Real b[3] = {x2,p1.y,p1.z};
-            bvh_line_tri_intersects(a,b,bvh_root,test);
+            bvh_line_tri_intersects(a,b,bvh_root,test,tol);
         } else {
             test(num_triangles,tri_pts,tri_norm);
         }
@@ -1986,7 +1991,7 @@ void STLtools::fillMarchingCubesEdgeIntersections (
                     XDim3{.x = tri.v2.y, .y = tri.v2.z, .z = tri.v2.x},
                     XDim3{.x = tri.v3.y, .y = tri.v3.z, .z = tri.v3.x},
                     XDim3{.x = norm.y, .y = norm.z, .z = norm.x},
-                    sdf(i,j,k)-sdf(i,j+1,k));
+                    sdf(i,j,k)-sdf(i,j+1,k), tol);
                 if (hit.first) {
                     Real const candidate = amrex::Clamp(
                         (hit.second-p1.y)/dx[1], 0.0_rt, 1.0_rt);
@@ -2003,7 +2008,7 @@ void STLtools::fillMarchingCubesEdgeIntersections (
         if (use_bvh) {
             Real a[3] = {p1.x,p1.y,p1.z};
             Real b[3] = {p1.x,y2,p1.z};
-            bvh_line_tri_intersects(a,b,bvh_root,test);
+            bvh_line_tri_intersects(a,b,bvh_root,test,tol);
         } else {
             test(num_triangles,tri_pts,tri_norm);
         }
@@ -2030,7 +2035,7 @@ void STLtools::fillMarchingCubesEdgeIntersections (
                     XDim3{.x = tri.v2.z, .y = tri.v2.x, .z = tri.v2.y},
                     XDim3{.x = tri.v3.z, .y = tri.v3.x, .z = tri.v3.y},
                     XDim3{.x = norm.z, .y = norm.x, .z = norm.y},
-                    sdf(i,j,k)-sdf(i,j,k+1));
+                    sdf(i,j,k)-sdf(i,j,k+1), tol);
                 if (hit.first) {
                     Real const candidate = amrex::Clamp(
                         (hit.second-p1.z)/dx[2], 0.0_rt, 1.0_rt);
@@ -2047,7 +2052,7 @@ void STLtools::fillMarchingCubesEdgeIntersections (
         if (use_bvh) {
             Real a[3] = {p1.x,p1.y,p1.z};
             Real b[3] = {p1.x,p1.y,z2};
-            bvh_line_tri_intersects(a,b,bvh_root,test);
+            bvh_line_tri_intersects(a,b,bvh_root,test,tol);
         } else {
             test(num_triangles,tri_pts,tri_norm);
         }
